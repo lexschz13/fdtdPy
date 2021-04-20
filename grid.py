@@ -1,11 +1,28 @@
 from pylab import *
+import os
+from tempfile import mkdtemp
 from tqdm import tqdm
 
-from detector import Detector
-from boundaries import Boundary
-from source import Source
-from objects import Object
 
+from .detector import Detector, tmpdir
+from .boundaries import Boundary
+from .sources import Source
+from .objects import Object
+
+
+"""
+nbits = 32
+
+if nbits==16:
+    C_DATA = copmlex32
+    F_DATA = float16
+elif nbits==32:
+    C_DATA = complex64
+    F_DATA = float32
+elif nbits = 64:
+    C_DATA = complex128
+    F_DATA = float64
+"""
 
 VACUUM_LIGHT_SPEED = 299792458
 VACUUM_IMPEDANCE = 376.7303
@@ -13,7 +30,7 @@ VACUUM_IMPEDANCE = 376.7303
 
 
 class Grid:
-    def __init__(self, shape, spatial_step = 1.55e-7, courant_number=None, permittivity=1, permeability=1, conductivity=0, monductivity=0):
+    def __init__(self, shape, spatial_step = 1.55e-7, courant_number=None, permittivity=1, permeability=1, conductivity=0, monductivity=0, is_phasor=True):
         self.Nx,self.Ny,self.Nz = shape
         if self.Nx<1 or self.Ny<1 or self.Nz<1:
             raise ValueError("Shape must be 1 or more")
@@ -43,8 +60,10 @@ class Grid:
         
         self.chxe, self.chye, self.chze, self.cexh, self.ceyh, self.cezh = [None]*6
         
-        self.E = zeros((self.Nx,self.Ny,self.Nz,3))
-        self.H = zeros((self.Nx,self.Ny,self.Nz,3))
+        self.is_phasor = is_phasor
+        F_TYPE = complex128 if self.is_phasor else float64
+        self.E = zeros((self.Nx,self.Ny,self.Nz,3), dtype=F_TYPE)
+        self.H = zeros((self.Nx,self.Ny,self.Nz,3), dtype=F_TYPE)
         
         self.objects = {}
         self.sources = []
@@ -133,11 +152,13 @@ class Grid:
     def add_source(self, source, slicing):
         source.grid = self
         source.slicing = slicing
+        source.add_params()
         self.sources += [source]
     
     def add_detector(self, detector, slicing):
         detector.grid = self
         detector.slicing = slicing
+        detector.index = len(self.detectors)
         self.detectors += [detector]
     
     def set_coefs(self):
@@ -193,6 +214,12 @@ class Grid:
             self.E[:,:,1:,1] += self.ceyh[:,:,1:] * (self.H[:,:,1:,0] - self.H[:,:,:-1,0]) #Ey
         
     def run(self, time_steps):
+        if os.path.exists(tmpdir):
+            for fl in os.listdir(tmpdir): #Remove past simulations
+                os.remove(os.path.join(tmpdir, fl))
+        for d in self.detectors:
+            d.create_fields_template(int(time_steps/d.capture_period))
+        
         for name in self.objects:
             obj = self.objects[name]
             self.permittivity[obj.slicing] = obj.permittivity
@@ -228,12 +255,9 @@ class Grid:
                 source.update_E(q * self.time_pace)
             
             for d in self.detectors:
-                d.save_fields()
-        
-        for d in self.detectors:
-            d.timing_E = squeeze(array(d.timing_E))
-            d.timing_H = squeeze(array(d.timing_H))
-        
+                if q%d.capture_period == 0:
+                    d.save_fields(q)
+                
     def visualizeEy(self):
         for d in self.detectors:
             d.visualizeEy()
