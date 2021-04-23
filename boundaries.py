@@ -1,7 +1,6 @@
 from pylab import *
+from .vacuum_constants import *
 
-
-VACUUM_PERMITTIVITY = 8.8541878128e-12
 
 
 class Boundary:
@@ -65,6 +64,12 @@ class Boundary:
             self.orientation = orient_list[[type(s) for s in self.slicing].index(int)]
     
     def other_coefs(self):
+        pass
+    
+    def update_boundH(self):
+        pass
+    
+    def update_boundE(self):
         pass
 
 
@@ -244,11 +249,19 @@ class Absorbing(Boundary):
 
 
 class PML(Boundary):
-    def __init__(self, kappa=1, alpha=1, sigma=1, thickness=3):
+    def __init__(self, refractive_index=1, kappa=1, alpha=1, sigma=1, thickness=10, growing_step=1e-7):
         super().__init__()
         self.kappa = kappa
         self.alpha = alpha
         self.sigma = sigma
+        
+        self.growing_step = growing_step
+        
+        if refractive_index < 1:
+            raise ValueError("Refractive index has to be 1 or more")
+            quit()
+        else:
+            self.refractive_index = refractive_index
         
         if thickness <= 1:
             raise ValueError("Thickess has to be at least 2")
@@ -267,253 +280,289 @@ class PML(Boundary):
         self.psiH = None
         self.psiE = None
         
+        self.chxe, self.chye, self.chze, self.cexh, self.ceyh, self.cezh = [None]*6
+        
         #Transversal boundaries will be considered mirrors
+    
+    def set_coefs(self):
+        #mu1/eps1 = mu2/eps2
+        #nPML = sqrt(eps2*mu2)*c = eps2 * sqrt(mu1/eps1) * c = eps2/eps1 * ng  => eps2 = eps1 * nPML/ng  and  mu2 = mu1 * nPML/ng
+        
+        #Unsqueezing
+        if self.grid.dim == 1:
+            flat_sh = (1, 1, 1, 3)
+        elif self.grid.dim == 2:
+            if self.orientation == "x":
+                flat_sh = (1, 1, self.Nz, 3) if self.grid.Ny == 1 else (1, self.Ny, 1, 3)
+            elif self.orientation == "y":
+                flat_sh = (self.Nx, 1, 1, 3) if self.grid.Nz == 1 else (1, 1, self.Nz, 3)
+            elif self.orientation == "z":
+                flat_sh = (1, self.Ny, 1, 3) if self.grid.Nx == 1 else (self.Nx, 1, 1, 3)
+        elif self.grid.dim == 3:
+            if self.orientation == "x":
+                flat_sh = (1, self.Ny, self.Nz, 3)
+            elif self.orientation == "y":
+                flat_sh = (self.Nx, 1, self.Nz, 3)
+            elif self.orientation == "z":
+                flat_sh = (self.Nx, self.Ny, 1, 3)
+        
+        ng = self.grid.refractive_index[self.slicing].reshape(flat_sh)
+        epsg = self.grid.permittivity[self.slicing].reshape(flat_sh)
+        mug = self.grid.permeability[self.slicing].reshape(flat_sh)
+        nPML = self.refractive_index * ones((self.Nx, self.Ny, self.Nz, 1))
+        epsPML = epsg * nPML/ng
+        muPML = mug * nPML/ng
+        
+        self.chxe = self.grid.courant_number / muPML[...,0] / VACUUM_IMPEDANCE
+        self.chye = self.grid.courant_number / muPML[...,1] / VACUUM_IMPEDANCE
+        self.chze = self.grid.courant_number / muPML[...,2] / VACUUM_IMPEDANCE
+        self.cexh = self.grid.courant_number / epsPML[...,0] * VACUUM_IMPEDANCE
+        self.ceyh = self.grid.courant_number / epsPML[...,1] * VACUUM_IMPEDANCE
+        self.cezh = self.grid.courant_number / epsPML[...,2] * VACUUM_IMPEDANCE
+    
+    def poly(self):
+        #Defines a cubic growth
+        if self.field == "H":
+            x = arange(0,self.thickness,1)*self.grid.spatial_step/self.growing_step
+        elif self.field == "E":
+            x = arange(self.thickness-1,-1,-1)*self.grid.spatial_step/self.growing_step
+        return x**3
     
     def other_coefs(self):
         if self.orientation == "x":
-            self.kappa = array([self.kappa,1,1])
-            self.sigma = array([self.sigma,0,0])
-             self.Nx, self.Ny, self.Nz = self.thickness, self.grid.Ny, self.grid.Nz
+            self.kappa = array([self.kappa,1,1])[None,None,None,:]
+            self.sigma = array([self.sigma,0,0])[None,None,None,:] * self.poly()[:,None,None,None]
+            self.Nx, self.Ny, self.Nz = self.thickness, self.grid.Ny, self.grid.Nz
         elif self.orientation == "y":
-            self.kappa = array([1,self.kappa,1])
-            self.sigma = array([0,self.sigma,0])
-             self.Nx, self.Ny, self.Nz = self.grid.Nx, self.thickness, self.grid.Nz
+            self.kappa = array([1,self.kappa,1])[None,None,None,:]
+            self.sigma = array([0,self.sigma,0])[None,None,None,:] * self.poly()[None,:,None,None]
+            self.Nx, self.Ny, self.Nz = self.grid.Nx, self.thickness, self.grid.Nz
         elif self.orientation == "z":
-            self.kappa = array([self.kappa,1,1])
-            self.sigma = array([0,0,self.sigma])
+            self.kappa = array([1,1,self.kappa])[None,None,None,:]
+            self.sigma = array([0,0,self.sigma])[None,None,None,:] * self.poly()[None,None,:,None]
             self.Nx, self.Ny, self.Nz = self.grid.Nx, self.grid.Ny, self.thickness
-        self.b = exp(-self.grid.time_pace/VACUUM_PERMITTIVITY * (self.alpha+self.sigma/self.kappa))
-        self.C = self.sigma/self.kappa / (self.sigma + self.kappa*self.alpha) * (1-self.b)
+        self.b = exp(-self.grid.time_pace/VACUUM_PERMITTIVITY * (self.alpha+self.sigma/self.kappa)) * ones((self.Nx,self.Ny,self.Nz,3))
+        self.C = self.sigma/self.kappa / (self.sigma + self.kappa*self.alpha) * (self.b-1)
         F_TYPE = complex128 if self.grid.is_phasor else float64
         self.H = zeros((self.Nx, self.Ny, self.Nz, 3), dtype=F_TYPE)
-        self.E = zeros(self.Nx, self.Ny, self.Nz, 3), dtype=F_TYPE)
+        self.E = zeros((self.Nx, self.Ny, self.Nz, 3), dtype=F_TYPE)
         self.psiH = zeros((self.Nx, self.Ny, self.Nz, 3, 3), dtype=F_TYPE) #Shape of layer grid, derivative direction, field component
         self.psiE = zeros((self.Nx, self.Ny, self.Nz, 3, 3), dtype=F_TYPE)
+        self.set_coefs()
     
     def update_psiH(self):
-        self.psiH *= self.b[:,None]
+        self.psiH *= self.b[...,None]
         if self.Nx > 1:
-            self.psiH[:-1,:,:,0,1] += self.C[0] * (self.E[1:,:,:,2] - self.E[:-1,:,:,2])
-            self.psiH[:-1,:,:,0,2] += self.C[0] * (self.E[1:,:,:,1] - self.E[:-1,:,:,1])
+            self.psiH[:-1,:,:,0,1] += self.C[:-1,:,:,0] * (self.E[1:,:,:,2] - self.E[:-1,:,:,2])
+            self.psiH[:-1,:,:,0,2] += self.C[:-1,:,:,0] * (self.E[1:,:,:,1] - self.E[:-1,:,:,1])
             #Boundaries
             if self.orientation == "x": #Normal boundaries
                 if self.field == "E": #At low extreme of grid, -1 idx is joined to grid
-                    self.psiH[-1,:,:,0,1] += self.C[0] * (self.grid.E[0,:,:,2] - self.E[-1,:,:,2])
-                    self.psiH[-1,:,:,0,2] += self.C[0] * (self.grid.E[0,:,:,1] - self.E[-1,:,:,1])
+                    self.psiH[-1,:,:,0,1] += self.C[-1,:,:,0] * (self.grid.E[0,:,:,2] - self.E[-1,:,:,2])
+                    self.psiH[-1,:,:,0,2] += self.C[-1,:,:,0] * (self.grid.E[0,:,:,1] - self.E[-1,:,:,1])
                 elif self.field == "H": #At high extreme of grid, -1 idx is considered for total absortion
-                    self.psiH[-1,:,:,0,1] -= self.C[0] * self.E[-1,:,:,2]
-                    self.psiH[-1,:,:,0,2] -= self.C[0] * self.E[-1,:,:,1]
+                    self.psiH[-1,:,:,0,1] -= self.C[-1,:,:,0] * self.E[-1,:,:,2]
+                    self.psiH[-1,:,:,0,2] -= self.C[-1,:,:,0] * self.E[-1,:,:,1]
             else: #Transversal boundaries
-                self.psiH[-1,:,:,0,1] -= self.C[0] * self.E[-1,:,:,2]
-                self.psiH[-1,:,:,0,2] -= self.C[0] * self.E[-1,:,:,1]
+                self.psiH[-1,:,:,0,1] -= self.C[-1,:,:,0] * self.E[-1,:,:,2]
+                self.psiH[-1,:,:,0,2] -= self.C[-1,:,:,0] * self.E[-1,:,:,1]
         if self.Ny > 1:
-            self.psiH[:,:-1,:,1,0] += self.C[1] * (self.E[:,1:,:,2] - self.E[:,:-1,:,2])
-            self.psiH[:,:-1,:,1,2] += self.C[1] * (self.E[:,1:,:,0] - self.E[:,:-1,:,0])
+            self.psiH[:,:-1,:,1,0] += self.C[:,:-1,:,1] * (self.E[:,1:,:,2] - self.E[:,:-1,:,2])
+            self.psiH[:,:-1,:,1,2] += self.C[:,:-1,:,1] * (self.E[:,1:,:,0] - self.E[:,:-1,:,0])
             #Boundaries
             if self.orientation == "y": #Normal boundaries
                 if self.field == "E": #At low extreme of grid, -1 idx is joined to grid
-                    self.psiH[:,-1,:,1,0] += self.C[1] * (self.grid.E[:,0,:,2] - self.E[:,-1,:,2])
-                    self.psiH[:,-1,:,1,2] += self.C[1] * (self.grid.E[:,0,:,0] - self.E[:,-1,:,0])
+                    self.psiH[:,-1,:,1,0] += self.C[:,-1,:,1] * (self.grid.E[:,0,:,2] - self.E[:,-1,:,2])
+                    self.psiH[:,-1,:,1,2] += self.C[:,-1,:,1] * (self.grid.E[:,0,:,0] - self.E[:,-1,:,0])
                 elif self.field == "H": #At high extreme of grid, -1 idx is considered for total absortion
-                    self.psiH[:,-1,:,1,0] -= self.C[1] * self.E[:,-1,:,2]
-                    self.psiH[:,-1,:,1,2] -= self.C[1] * self.E[:,-1,:,0]
+                    self.psiH[:,-1,:,1,0] -= self.C[:,-1,:,1] * self.E[:,-1,:,2]
+                    self.psiH[:,-1,:,1,2] -= self.C[:,-1,:,1] * self.E[:,-1,:,0]
             else: #Transveral boundaries
-                self.psiH[:,-1,:,1,0] -= self.C[1] * self.E[:,-1,:,2]
-                self.psiH[:,-1,:,1,2] -= self.C[1] * self.E[:,-1,:,0]
+                self.psiH[:,-1,:,1,0] -= self.C[:,-1,:,1] * self.E[:,-1,:,2]
+                self.psiH[:,-1,:,1,2] -= self.C[:,-1,:,1] * self.E[:,-1,:,0]
         if self.Nz > 1:
-            self.psiH[:,:,:-1,2,0] += self.C[2] * (self.E[:,:,1:,1] - self.E[:,:,:-1,1])
-            self.psiH[:,:,:-1,2,1] += self.C[2] * (self.E[:,:,1:,0] - self.E[:,:,:-1,0])
+            self.psiH[:,:,:-1,2,0] += self.C[:,:,:-1,2] * (self.E[:,:,1:,1] - self.E[:,:,:-1,1])
+            self.psiH[:,:,:-1,2,1] += self.C[:,:,:-1,2] * (self.E[:,:,1:,0] - self.E[:,:,:-1,0])
             #Boundaries
             if self.orientation == "z": #Normal boundaries
                 if self.field == "E": #At low extreme of grid, -1 idx is joined to grid
-                    self.psiH[:,:,-1,2,0] += self.C[2] * (self.grid.E[:,:,0,1] - self.E[:,:,-1,1])
-                    self.psiH[:,:,-1,2,1] += self.C[2] * (self.grid.E[:,:,0,0] - self.E[:,:,-1,0])
+                    self.psiH[:,:,-1,2,0] += self.C[:,:,-1,2] * (self.grid.E[:,:,0,1] - self.E[:,:,-1,1])
+                    self.psiH[:,:,-1,2,1] += self.C[:,:,-1,2] * (self.grid.E[:,:,0,0] - self.E[:,:,-1,0])
                 elif self.field == "H": #At high extreme of grid, -1 idx is considered for total absortion
-                    self.psiH[:,:,-1,2,0] -= self.C[2] * self.E[:,:,-1,1]
-                    self.psiH[:,:,-1,2,1] -= self.C[2] * self.E[:,:,-1,0]
+                    self.psiH[:,:,-1,2,0] -= self.C[:,:,-1,2] * self.E[:,:,-1,1]
+                    self.psiH[:,:,-1,2,1] -= self.C[:,:,-1,2] * self.E[:,:,-1,0]
             else: #Transversal boundaries
-                self.psiH[:,:,-1,2,0] -= self.C[2] * self.E[:,:,-1,1]
-                self.psiH[:,:,-1,2,1] -= self.C[2] * self.E[:,:,-1,0]
+                self.psiH[:,:,-1,2,0] -= self.C[:,:,-1,2] * self.E[:,:,-1,1]
+                self.psiH[:,:,-1,2,1] -= self.C[:,:,-1,2] * self.E[:,:,-1,0]
     
-    def update_H(self):
+    def update_boundH(self):
         self.update_psiH()
         #Update on x axis
         if self.Nx > 1:
-            self.H[:-1,:,:,1] += self.chye[:-1,:,:] * ((self.E[1:,:,:,2] - self.E[:-1,:,:,2])/self.kappa[0] + self.psiH[:-1,:,:,0,1]) #Hy
-            self.H[:-1,:,:,2] -= self.chze[:-1,:,:] * ((self.E[1:,:,:,1] - self.E[:-1,:,:,1])/self.kappa[0] + self.psiH[:-1,:,:,0,2]) #Hz
+            self.H[:-1,:,:,1] += self.chye[:-1,:,:] * ((self.E[1:,:,:,2] - self.E[:-1,:,:,2])/squeeze(self.kappa[...,0]) + self.psiH[:-1,:,:,0,1]) #Hy
+            self.H[:-1,:,:,2] -= self.chze[:-1,:,:] * ((self.E[1:,:,:,1] - self.E[:-1,:,:,1])/squeeze(self.kappa[...,0]) + self.psiH[:-1,:,:,0,2]) #Hz
             #Boundaries
             if self.orientation == "x": #Normal boundaries
                 if self.field == "E": #At low extreme of grid, -1 idx is joined to grid
-                    #PML fields
-                    self.H[-1,:,:,1] += self.chye[-1,:,:] * ((self.grid.E[0,:,:,2] - self.E[-1,:,:,2])/self.kappa[0] + self.psiH[-1,:,:,0,1]) #Hy
-                    self.H[-1,:,:,2] -= self.chze[-1,:,:] * ((self.grid.E[0,:,:,1] - self.E[-1,:,:,1])/self.kappa[0] + self.psiH[-1,:,:,0,2]) #Hz
+                    self.H[-1,:,:,1] += self.chye[-1,:,:] * ((self.grid.E[0,:,:,2] - self.E[-1,:,:,2])/squeeze(self.kappa[...,0]) + self.psiH[-1,:,:,0,1]) #Hy
+                    self.H[-1,:,:,2] -= self.chze[-1,:,:] * ((self.grid.E[0,:,:,1] - self.E[-1,:,:,1])/squeeze(self.kappa[...,0]) + self.psiH[-1,:,:,0,2]) #Hz
                 elif self.field == "H": #At high extreme of grid, -1 idx is considered for total absortion
-                    #PML fields
-                    self.H[-1,:,:,1] += self.chye[-1,:,:] * (-self.E[-1,:,:,2]/self.kappa[0] + self.psiH[-1,:,:,0,1]) #Hy
-                    self.H[-1,:,:,2] -= self.chze[-1,:,:] * (-self.E[-1,:,:,1]/self.kappa[0] + self.psiH[-1,:,:,0,2]) #Hz
-                    #Grid fields
-                    self.grid.H[-1,:,:,1] += self.grid.chye[-1,:,:] * (self.E[0,:,:,2] - self.grid.E[-1,:,:,2]) #Hy
-                    self.grid.H[-1,:,:,2] -= self.grid.chze[-1,:,:] * (self.E[0,:,:,1] - self.grid.E[-1,:,:,1]) #Hz
+                    self.H[-1,:,:,1] += self.chye[-1,:,:] * (-self.E[-1,:,:,2]/squeeze(self.kappa[...,0]) + self.psiH[-1,:,:,0,1]) #Hy
+                    self.H[-1,:,:,2] -= self.chze[-1,:,:] * (-self.E[-1,:,:,1]/squeeze(self.kappa[...,0]) + self.psiH[-1,:,:,0,2]) #Hz
             else: #Transversal boundaries
-                #PML fields
-                self.H[-1,:,:,1] += self.chye[-1,:,:] * (-self.E[-1,:,:,2]/self.kappa[0] + self.psiH[-1,:,:,0,1]) #Hy
-                self.H[-1,:,:,2] -= self.chze[-1,:,:] * (-self.E[-1,:,:,1]/self.kappa[0] + self.psiH[-1,:,:,0,2]) #Hz
+                self.H[-1,:,:,1] += self.chye[-1,:,:] * (-self.E[-1,:,:,2]/squeeze(self.kappa[...,0]) + self.psiH[-1,:,:,0,1]) #Hy
+                self.H[-1,:,:,2] -= self.chze[-1,:,:] * (-self.E[-1,:,:,1]/squeeze(self.kappa[...,0]) + self.psiH[-1,:,:,0,2]) #Hz
         
         #Update on y axis
         if self.Ny > 1:
-            self.H[:,:-1,:,0] -= self.chxe[:,:-1,:] * ((self.E[:,1:,:,2] - self.E[:,:-1,:,2])/self.kappa[1] + self.psiH[:,:-1,:,1,0]) #Hx
-            self.H[:,:-1,:,2] += self.chze[:,:-1,:] * ((self.E[:,1:,:,0] - self.E[:,:-1,:,0])/self.kappa[1] + self.psiH[:,:-1,:,1,2]) #Hz
+            self.H[:,:-1,:,0] -= self.chxe[:,:-1,:] * ((self.E[:,1:,:,2] - self.E[:,:-1,:,2])/squeeze(self.kappa[...,1]) + self.psiH[:,:-1,:,1,0]) #Hx
+            self.H[:,:-1,:,2] += self.chze[:,:-1,:] * ((self.E[:,1:,:,0] - self.E[:,:-1,:,0])/squeeze(self.kappa[...,1]) + self.psiH[:,:-1,:,1,2]) #Hz
             #Boundaries
             if self.orientation == "y": #Normal boundaries
                 if self.field == "E": #At low extreme of grid, -1 idx is joined to grid
-                    #PML fields
-                    self.H[:,-1,:,0] -= self.chxe[:,-1,:] * ((self.grid.E[:,0,:,2] - self.E[:,-1,:,2])/self.kappa[1] + self.psiH[:,-1,:,1,0]) #Hx
-                    self.H[:,-1,:,2] += self.chze[:,-1,:] * ((self.grid.E[:,0,:,0] - self.E[:,-1,:,0])/self.kappa[1] + self.psiH[:,-1,:,1,2]) #Hz
+                    self.H[:,-1,:,0] -= self.chxe[:,-1,:] * ((self.grid.E[:,0,:,2] - self.E[:,-1,:,2])/squeeze(self.kappa[...,1]) + self.psiH[:,-1,:,1,0]) #Hx
+                    self.H[:,-1,:,2] += self.chze[:,-1,:] * ((self.grid.E[:,0,:,0] - self.E[:,-1,:,0])/squeeze(self.kappa[...,1]) + self.psiH[:,-1,:,1,2]) #Hz
                 elif self.field == "H": #At high extreme of grid, -1 idx is considered for total absortion
-                    #PML fields
-                    self.H[:,-1,:,0] -= self.chxe[:,-1,:] * (-self.E[:,-1,:,2]/self.kappa[1] + self.psiH[:,-1,:,1,0]) #Hx
-                    self.H[:,-1,:,2] += self.chze[:,-1,:] * (-self.E[:,-1,:,0]/self.kappa[1] + self.psiH[:,-1,:,1,2]) #Hz
-                    #Grid fields
-                    self.grid.H[:,-1,:,0] -= self.grid.chxe[:,-1,:] * (self.E[:,0,:,2] - self.grid.E[:,-1,:,2]) #Hx
-                    self.grid.H[:,-1,:,2] += self.grid.chze[:,-1,:] * (self.E[:,0,:,0] - self.grid.E[:,-1,:,0]) #Hz
+                    self.H[:,-1,:,0] -= self.chxe[:,-1,:] * (-self.E[:,-1,:,2]/squeeze(self.kappa[...,1]) + self.psiH[:,-1,:,1,0]) #Hx
+                    self.H[:,-1,:,2] += self.chze[:,-1,:] * (-self.E[:,-1,:,0]/squeeze(self.kappa[...,1]) + self.psiH[:,-1,:,1,2]) #Hz
             else: #Transversal boundaries
-                #PML fields
-                self.H[:,-1,:,0] -= self.chxe[:,-1,:] * (-self.E[:,-1,:,2]/self.kappa[1] + self.psiH[:,-1,:,1,0]) #Hx
-                self.H[:,-1,:,2] += self.chze[:,-1,:] * (-self.E[:,-1,:,0]/self.kappa[1] + self.psiH[:,-1,:,1,2]) #Hz
+                self.H[:,-1,:,0] -= self.chxe[:,-1,:] * (-self.E[:,-1,:,2]/squeeze(self.kappa[...,1]) + self.psiH[:,-1,:,1,0]) #Hx
+                self.H[:,-1,:,2] += self.chze[:,-1,:] * (-self.E[:,-1,:,0]/squeeze(self.kappa[...,1]) + self.psiH[:,-1,:,1,2]) #Hz
         
         #Update on z axis
         if self.Nz > 1:
-            self.H[:,:,:-1,0] += self.chxe[:,:,:-1] * ((self.E[:,:,1:,1] - self.E[:,:,:-1,1])/self.kappa[2] + self.psiH[:,:,:-1,2,0]) #Hx
-            self.H[:,:,:-1,1] -= self.chye[:,:,:-1] * ((self.E[:,:,1:,0] - self.E[:,:,:-1,0])/self.kappa[2] + self.psiH[:,:,:-1,2,1]) #Hy
+            self.H[:,:,:-1,0] += self.chxe[:,:,:-1] * ((self.E[:,:,1:,1] - self.E[:,:,:-1,1])/squeeze(self.kappa[...,2]) + self.psiH[:,:,:-1,2,0]) #Hx
+            self.H[:,:,:-1,1] -= self.chye[:,:,:-1] * ((self.E[:,:,1:,0] - self.E[:,:,:-1,0])/squeeze(self.kappa[...,2]) + self.psiH[:,:,:-1,2,1]) #Hy
             #Boundaries
             if self.orientation == "z": #Normal boundaries
                 if self.field == "E": #At low extreme of grid, -1 idx is joined to grid
-                    #PML fields
-                    self.H[:,:,-1,0] += self.chxe[:,:,-1] * ((self.grid.E[:,:,0,1] - self.E[:,:,-1,1])/self.kappa[2] + self.psiH[:,:,-1,2,0]) #Hx
-                    self.H[:,:,-1,1] -= self.chye[:,:,-1] * ((self.grid.E[:,:,0,0] - self.E[:,:,-1,0])/self.kappa[2] + self.psiH[:,:,-1,2,1]) #Hy
+                    self.H[:,:,-1,0] += self.chxe[:,:,-1] * ((self.grid.E[:,:,0,1] - self.E[:,:,-1,1])/squeeze(self.kappa[...,2]) + self.psiH[:,:,-1,2,0]) #Hx
+                    self.H[:,:,-1,1] -= self.chye[:,:,-1] * ((self.grid.E[:,:,0,0] - self.E[:,:,-1,0])/squeeze(self.kappa[...,2]) + self.psiH[:,:,-1,2,1]) #Hy
                 elif self.field == "H": #At high extreme of grid, -1 idx is considered for total absortion
-                    #PML fields
-                    self.H[:,:,-1,0] += self.chxe[:,:,-1] * (-self.E[:,:,-1,1]/self.kappa[2] + self.psiH[:,:,-1,2,0]) #Hx
-                    self.H[:,:,-1,2] -= self.chze[:,:,-1] * (-self.E[:,:,-1,0]/self.kappa[2] + self.psiH[:,:,-1,2,1]) #Hy
-                    #Grid fields
-                    self.grid.H[:,:,-1,0] += self.grid.chxe[:,:,-1] * (self.E[:,:,0,1] - self.grid.E[:,:,-1,1]) #Hx
-                    self.grid.H[:,:,-1,1] -= self.grid.chye[:,:,-1] * (self.E[:,:,0,0] - self.grid.E[:,:,-1,0]) #Hy
-                else: #Transversal boundaries
-                #PML fields
-                self.H[:,:,-1,0] += self.chxe[:,:,-1] * (-self.E[:,:,-1,1]/self.kappa[2] + self.psiH[:,:,-1,2,0]) #Hx
-                self.H[:,:,-1,1] -= self.chye[:,:,-1] * (-self.E[:,:,-1,0]/self.kappa[2] + self.psiH[:,:,-1,2,1]) #Hx
+                    self.H[:,:,-1,0] += self.chxe[:,:,-1] * (-self.E[:,:,-1,1]/squeeze(self.kappa[...,2]) + self.psiH[:,:,-1,2,0]) #Hx
+                    self.H[:,:,-1,1] -= self.chye[:,:,-1] * (-self.E[:,:,-1,0]/squeeze(self.kappa[...,2]) + self.psiH[:,:,-1,2,1]) #Hy
+            else: #Transversal boundaries
+                self.H[:,:,-1,0] += self.chxe[:,:,-1] * (-self.E[:,:,-1,1]/squeeze(self.kappa[...,2]) + self.psiH[:,:,-1,2,0]) #Hx
+                self.H[:,:,-1,1] -= self.chye[:,:,-1] * (-self.E[:,:,-1,0]/squeeze(self.kappa[...,2]) + self.psiH[:,:,-1,2,1]) #Hy
+    
+    def update_H(self):
+        if self.orientation == "x":
+            self.grid.H[-1,:,:,1] += self.grid.chye[-1,:,:] * (self.E[0,:,:,2] - self.grid.E[-1,:,:,2]) #Hy
+            self.grid.H[-1,:,:,2] -= self.grid.chze[-1,:,:] * (self.E[0,:,:,1] - self.grid.E[-1,:,:,1]) #Hz
+        elif self.orientation == "y":
+            self.grid.H[:,-1,:,0] -= self.grid.chxe[:,-1,:] * (self.E[:,0,:,2] - self.grid.E[:,-1,:,2]) #Hx
+            self.grid.H[:,-1,:,2] += self.grid.chze[:,-1,:] * (self.E[:,0,:,0] - self.grid.E[:,-1,:,0]) #Hz
+        elif self.orientation == "z":
+            self.grid.H[:,:,-1,0] += self.grid.chxe[:,:,-1] * (self.E[:,:,0,1] - self.grid.E[:,:,-1,1]) #Hx
+            self.grid.H[:,:,-1,1] -= self.grid.chye[:,:,-1] * (self.E[:,:,0,0] - self.grid.E[:,:,-1,0]) #Hy
     
     def update_psiE(self):
-        self.psiE *= self.b[:,None]
+        self.psiE *= self.b[...,None]
         #Update on x axis
         if self.Nx > 1:
-            self.psiE[1:,:,:,0,1] += self.C[0] * (self.H[1:,:,:,2] - self.H[:-1,:,:,2])
-            self.psiE[1:,:,:,0,2] += self.C[0] * (self.H[1:,:,:,1] - self.H[:-1,:,:,1])
+            self.psiE[1:,:,:,0,1] += self.C[1:,:,:,0] * (self.H[1:,:,:,2] - self.H[:-1,:,:,2])
+            self.psiE[1:,:,:,0,2] += self.C[1:,:,:,0] * (self.H[1:,:,:,1] - self.H[:-1,:,:,1])
             #Boundaries
             if self.orientation == "x": #Normal boundaries
                 if self.field == "E": #At low extreme of grid, 0 idx is considered for total absortion
-                    self.psiE[0,:,:,0,1] += self.C[0] * self.H[0,:,:,2]
-                    self.psiE[0,:,:,0,2] += self.C[0] * self.H[0,:,:,1]
+                    self.psiE[0,:,:,0,1] += self.C[0,:,:,0] * self.H[0,:,:,2]
+                    self.psiE[0,:,:,0,2] += self.C[0,:,:,0] * self.H[0,:,:,1]
                 elif self.field == "H": #At high extreme of grid, 0 idx is joined to grid
-                    self.psiE[0,:,:,0,1] += self.C[0] * (self.H[0,:,:,2] - self.grid.H[-1,:,:,2])
-                    self.psiE[0,:,:,0,2] += self.C[0] * (self.H[0,:,:,1] - self.grid.H[-1,:,:,1])
+                    self.psiE[0,:,:,0,1] += self.C[0,:,:,0] * (self.H[0,:,:,2] - self.grid.H[-1,:,:,2])
+                    self.psiE[0,:,:,0,2] += self.C[0,:,:,0] * (self.H[0,:,:,1] - self.grid.H[-1,:,:,1])
             else: #Transversal boundaries
-                self.psiE[0,:,:,0,1] += self.C[0] * self.H[0,:,:,2]
-                self.psiE[0,:,:,0,2] += self.C[0] * self.H[0,:,:,1]
+                self.psiE[0,:,:,0,1] += self.C[0,:,:,0] * self.H[0,:,:,2]
+                self.psiE[0,:,:,0,2] += self.C[0,:,:,0] * self.H[0,:,:,1]
         
         #Update on y axis
         if self.Ny > 1:
-            self.psiE[:,1:,:,1,0] += self.C[1] * (self.H[:,1:,:,2] - self.H[:,:-1,:,2])
-            self.psiE[:,1:,:,1,2] += self.C[1] * (self.H[:,1:,:,0] - self.H[:,:-1,:,0])
+            self.psiE[:,1:,:,1,0] += self.C[:,1:,:,1] * (self.H[:,1:,:,2] - self.H[:,:-1,:,2])
+            self.psiE[:,1:,:,1,2] += self.C[:,1:,:,1] * (self.H[:,1:,:,0] - self.H[:,:-1,:,0])
             #Boundaries
             if self.orientation == "y": #Normal boundaries
                 if self.field == "E": #At low extreme of grid, 0 idx is considered for total absortion
-                    self.psiE[:,0,:,1,0] += self.C[1] * self.H[:,0,:,2]
-                    self.psiE[:,0,:,1,2] += self.C[1] * self.H[:,0,:,0]
+                    self.psiE[:,0,:,1,0] += self.C[:,0,:,1] * self.H[:,0,:,2]
+                    self.psiE[:,0,:,1,2] += self.C[:,0,:,1] * self.H[:,0,:,0]
                 elif self.field == "H": #At high extreme of grid, 0 idx is joined to grid
-                    self.psiE[:,0,:,1,0] += self.C[1] * (self.H[:,0,:,2] - self.grid.H[:,-1,:,2])
-                    self.psiE[:,0,:,1,2] += self.C[1] * (self.H[:,0,:,0] - self.grid.H[:,-1,:,0])
+                    self.psiE[:,0,:,1,0] += self.C[:,0,:,1] * (self.H[:,0,:,2] - self.grid.H[:,-1,:,2])
+                    self.psiE[:,0,:,1,2] += self.C[:,0,:,1] * (self.H[:,0,:,0] - self.grid.H[:,-1,:,0])
             else: #Transversal boundaries
-                self.psiE[:,0,:,1,0] += self.C[1] * self.H[:,0,:,2]
-                self.psiE[:,0,:,1,2] += self.C[1] * self.H[:,0,:,0]
+                self.psiE[:,0,:,1,0] += self.C[:,0,:,1] * self.H[:,0,:,2]
+                self.psiE[:,0,:,1,2] += self.C[:,0,:,1] * self.H[:,0,:,0]
         
         #Update on z axis
         if self.Nz > 1:
-            self.psiE[:,:,1:,2,0] += self.C[2] * (self.H[:,:,1:,1] - self.H[:,:-1,:,1])
-            self.psiE[:,:,1:,2,1] += self.C[2] * (self.H[:,:,1:,0] - self.H[:,:-1,:,0])
+            self.psiE[:,:,1:,2,0] += self.C[:,:,1:,2] * (self.H[:,:,1:,1] - self.H[:,:,:-1,1])
+            self.psiE[:,:,1:,2,1] += self.C[:,:,1:,2] * (self.H[:,:,1:,0] - self.H[:,:,:-1,0])
             #Boundaries
             if self.orientation == "z": #Normal boundaries
                 if self.field == "E": #At low extreme of grid, 0 idx is considered for total absortion
-                    self.psiE[:,:,0,2,0] += self.C[2] * self.H[:,:,0,1]
-                    self.psiE[:,:,0,2,1] += self.C[2] * self.H[:,:,0,0]
+                    self.psiE[:,:,0,2,0] += self.C[:,:,0,2] * self.H[:,:,0,1]
+                    self.psiE[:,:,0,2,1] += self.C[:,:,0,2] * self.H[:,:,0,0]
                 elif self.field == "H": #At high extreme of grid, 0 idx is joined to grid
-                    self.psiE[:,:,0,2,0] += self.C[2] * (self.H[:,:,0,1] - self.grid.H[:,:,-1,1])
-                    self.psiE[:,:,0,2,1] += self.C[2] * (self.H[:,:,0,0] - self.grid.H[:,:,-1,0])
+                    self.psiE[:,:,0,2,0] += self.C[:,:,0,2] * (self.H[:,:,0,1] - self.grid.H[:,:,-1,1])
+                    self.psiE[:,:,0,2,1] += self.C[:,:,0,2] * (self.H[:,:,0,0] - self.grid.H[:,:,-1,0])
             else: #Transversal boundaries
-                self.psiE[:,:,0,2,0] += self.C[2] * self.H[:,:,0,1]
-                self.psiE[:,:,0,2,1] += self.C[2] * self.H[:,:,0,0]
+                self.psiE[:,:,0,2,0] += self.C[:,:,0,2] * self.H[:,:,0,1]
+                self.psiE[:,:,0,2,1] += self.C[:,:,0,2] * self.H[:,:,0,0]
     
-    def update_E(self):
+    def update_boundE(self):
         self.update_psiE()
         #Update on x axis
         if self.Nx > 1:
-            self.E[1:,:,:,1] -= self.ceyh[1:,:,:] * ((self.H[1:,:,:,2] - self.H[:-1,:,:,2])/self.kappa[0] + self.psiE[1:,:,:,0,1]) #Ey
-            self.E[1:,:,:,2] += self.cezh[1:,:,:] * ((self.H[1:,:,:,1] - self.H[:-1,:,:,1])/self.kappa[0] + self.psiE[1:,:,:,0,2]) #Ez
+            self.E[1:,:,:,1] -= self.ceyh[1:,:,:] * ((self.H[1:,:,:,2] - self.H[:-1,:,:,2])/squeeze(self.kappa[...,0]) + self.psiE[1:,:,:,0,1]) #Ey
+            self.E[1:,:,:,2] += self.cezh[1:,:,:] * ((self.H[1:,:,:,1] - self.H[:-1,:,:,1])/squeeze(self.kappa[...,0]) + self.psiE[1:,:,:,0,2]) #Ez
             #Boundaries
             if self.orientation == "x": #Normal boundaries
                 if self.field == "E": #At low extreme of grid, 0 idx is considered for total absortion
-                    #PML fields
-                    self.E[0,:,:,1] -= self.ceyh[0,:,:] * (self.H[0,:,:,2]/self.kappa[0] + self.psiE[0,:,:,0,1]) #Ey
-                    self.E[0,:,:,2] += self.cezh[0,:,:] * (self.H[0,:,:,1]/self.kappa[0] + self.psiE[0,:,:,0,2]) #Ez
-                    #Grid fields
-                    self.grid.E[0,:,:,1] -= self.grid.ceyh[0,:,:] * (self.grid.H[0,:,:,2] - self.H[-1,:,:,2]) #Ey
-                    self.grid.E[0,:,:,2] += self.grid.cezh[0,:,:] * (self.grid.H[0,:,:,1] - self.H[-1,:,:,1]) #Ez
+                    self.E[0,:,:,1] -= self.ceyh[0,:,:] * (self.H[0,:,:,2]/squeeze(self.kappa[...,0]) + self.psiE[0,:,:,0,1]) #Ey
+                    self.E[0,:,:,2] += self.cezh[0,:,:] * (self.H[0,:,:,1]/squeeze(self.kappa[...,0]) + self.psiE[0,:,:,0,2]) #Ez
                 elif self.field == "H": #At high extreme of grid, 0 idx is joined to grid
-                    self.E[0,:,:,1] -= self.ceyh[0,:,:] * ((self.H[0,:,:,2] - self.grid.H[-1,:,:,2])/self.kappa[0] + self.psiE[0,:,:,:,0,1]) #Ey
-                    self.E[0,:,:,2] += self.cezh[0,:,:] * ((self.H[0,:,:,1] - self.grid.H[-1,:,:,1])/self.kappa[0] + self.psiE[0,:,:,:,0,2]) #Ey
+                    self.E[0,:,:,1] -= self.ceyh[0,:,:] * ((self.H[0,:,:,2] - self.grid.H[-1,:,:,2])/squeeze(self.kappa[...,0]) + self.psiE[0,:,:,0,1]) #Ey
+                    self.E[0,:,:,2] += self.cezh[0,:,:] * ((self.H[0,:,:,1] - self.grid.H[-1,:,:,1])/squeeze(self.kappa[...,0]) + self.psiE[0,:,:,0,2]) #Ey
             else: #Transversal boundaries
-                #PML fields
-                self.E[0,:,:,1] -= self.ceyh[0,:,:] * (self.H[0,:,:,2]/self.kappa[0] + self.psiE[0,:,:,0,1]) #Ey
-                self.E[0,:,:,2] += self.cezh[0,:,:] * (self.H[0,:,:,1]/self.kappa[0] + self.psiE[0,:,:,0,2]) #Ez
+                self.E[0,:,:,1] -= self.ceyh[0,:,:] * (self.H[0,:,:,2]/squeeze(self.kappa[...,0]) + self.psiE[0,:,:,0,1]) #Ey
+                self.E[0,:,:,2] += self.cezh[0,:,:] * (self.H[0,:,:,1]/squeeze(self.kappa[...,0]) + self.psiE[0,:,:,0,2]) #Ez
         
         #Update on y axis
         if self.Ny > 1:
-            self.E[:,1:,:,0] += self.cexh[:,1:,:] * ((self.H[:,1:,:,2] - self.H[:,:-1,:,2])/self.kappa[1] + self.psiE[:,1:,:,1,0]) #Ex
-            self.E[:,1:,:,2] -= self.cezh[:,1:,:] * ((self.H[:,1:,:,0] - self.H[:,:-1,:,0])/self.kappa[1] + self.psiE[:,1:,:,1,2]) #Ez
+            self.E[:,1:,:,0] += self.cexh[:,1:,:] * ((self.H[:,1:,:,2] - self.H[:,:-1,:,2])/squeeze(self.kappa[...,1]) + self.psiE[:,1:,:,1,0]) #Ex
+            self.E[:,1:,:,2] -= self.cezh[:,1:,:] * ((self.H[:,1:,:,0] - self.H[:,:-1,:,0])/squeeze(self.kappa[...,1]) + self.psiE[:,1:,:,1,2]) #Ez
             #Boundaries
             if self.orientation == "y": #Normal boundaries
                 if self.field == "E": #At low extreme of grid, 0 idx is considered for total absortion
-                    #PML fields
-                    self.E[:,0,:,0] += self.cexh[:,0,:] * (self.H[:,0,:,2]/self.kappa[1] + self.psiE[:,0,:,1,0]) #Ex
-                    self.E[:,0,:,2] -= self.cezh[:,0,:] * (self.H[:,0,:,0]/self.kappa[1] + self.psiE[:,0,:,1,2]) #Ez
-                    #Grid fields
-                    self.grid.E[:,0,:,0] += self.grid.cexh[:,0,:] * (self.grid.H[:,0,:,2] - self.H[:,-1,:,2]) #Ex
-                    self.grid.E[:,0,:,2] -= self.grid.cezh[:,0,:] * (self.grid.H[:,0,:,0] - self.H[:,-1,:,0]) #Ez
+                    self.E[:,0,:,0] += self.cexh[:,0,:] * (self.H[:,0,:,2]/squeeze(self.kappa[...,1]) + self.psiE[:,0,:,1,0]) #Ex
+                    self.E[:,0,:,2] -= self.cezh[:,0,:] * (self.H[:,0,:,0]/squeeze(self.kappa[...,1]) + self.psiE[:,0,:,1,2]) #Ez
                 elif self.field == "H": #At high extreme of grid, 0 idx is joined to grid
-                    self.E[:,0,:,0] += self.cexh[:,0,:] * ((self.H[:,0,:,2] - self.grid.H[:,-1,:,2])/self.kappa[1] + self.psiE[:,0,:,:,1,0]) #Ex
-                    self.E[:,0,:,2] -= self.cezh[:,0,:] * ((self.H[:,0,:,0] - self.grid.H[:,-1,:,0])/self.kappa[1] + self.psiE[:,0,:,:,1,2]) #Ez
+                    self.E[:,0,:,0] += self.cexh[:,0,:] * ((self.H[:,0,:,2] - self.grid.H[:,-1,:,2])/squeeze(self.kappa[...,1]) + self.psiE[:,0,:,1,0]) #Ex
+                    self.E[:,0,:,2] -= self.cezh[:,0,:] * ((self.H[:,0,:,0] - self.grid.H[:,-1,:,0])/squeeze(self.kappa[...,1]) + self.psiE[:,0,:,1,2]) #Ez
             else: #Transversal boundaries
-                #PML fields
-                self.E[:,0,:,0] += self.cexh[:,0,:] * (self.H[:,0,:,2]/self.kappa[1] + self.psiE[:,0,:,1,0]) #Ex
-                self.E[:,0,:,2] -= self.cezh[:,0,:] * (self.H[:,0,:,0]/self.kappa[1] + self.psiE[:,0,:,1,2]) #Ez
+                self.E[:,0,:,0] += self.cexh[:,0,:] * (self.H[:,0,:,2]/squeeze(self.kappa[...,1]) + self.psiE[:,0,:,1,0]) #Ex
+                self.E[:,0,:,2] -= self.cezh[:,0,:] * (self.H[:,0,:,0]/squeeze(self.kappa[...,1]) + self.psiE[:,0,:,1,2]) #Ez
         
         #Update on z axis
         if self.Nz > 1:
-            self.E[:,:,1:,0] -= self.cexh[:,:,1:] * ((self.H[:,:,1:,1] - self.H[:,:,:-1,1])/self.kappa[2] + self.psiE[:,:,1:,2,0]) #Ex
-            self.E[:,:,1:,1] += self.ceyh[:,:,1:] * ((self.H[:,:,1:,0] - self.H[:,:,:-1,0])/self.kappa[2] + self.psiE[:,:,1:,2,1]) #Ey
+            self.E[:,:,1:,0] -= self.cexh[:,:,1:] * ((self.H[:,:,1:,1] - self.H[:,:,:-1,1])/squeeze(self.kappa[...,2]) + self.psiE[:,:,1:,2,0]) #Ex
+            self.E[:,:,1:,1] += self.ceyh[:,:,1:] * ((self.H[:,:,1:,0] - self.H[:,:,:-1,0])/squeeze(self.kappa[...,2]) + self.psiE[:,:,1:,2,1]) #Ey
             #Boundaries
-            if self.orientation == "y": #Normal boundaries
+            if self.orientation == "z": #Normal boundaries
                 if self.field == "E": #At low extreme of grid, 0 idx is considered for total absortion
-                    #PML fields
-                    self.E[:,:,0,0] -= self.cexh[:,:,0] * (self.H[:,0,:,1]/self.kappa[2] + self.psiE[:,0,:,2,0]) #Ex
-                    self.E[:,:,0,1] += self.ceyh[:,:,0] * (self.H[:,0,:,0]/self.kappa[2] + self.psiE[:,0,:,2,1]) #Ey
-                    #Grid fields
-                    self.grid.E[:,:,0,0] += self.grid.cexh[:,:,0] * (self.grid.H[:,:,0,1] - self.H[:,:,-1,1]) #Ex
-                    self.grid.E[:,:,0,1] -= self.grid.ceyh[:,:,0] * (self.grid.H[:,:,0,0] - self.H[:,:,-1,0]) #Ey
+                    self.E[:,:,0,0] -= self.cexh[:,:,0] * (self.H[:,:,0,1]/squeeze(self.kappa[...,2]) + self.psiE[:,:,0,2,0]) #Ex
+                    self.E[:,:,0,1] += self.ceyh[:,:,0] * (self.H[:,:,0,0]/squeeze(self.kappa[...,2]) + self.psiE[:,:,0,2,1]) #Ey
                 elif self.field == "H": #At high extreme of grid, 0 idx is joined to grid
-                    self.E[:,:,0,0] -= self.cexh[:,:,0] * ((self.H[:,:,0,1] - self.grid.H[:,:,-1,1])/self.kappa[2] + self.psiE[:,0,:,:,2,0]) #Ex
-                    self.E[:,:,0,1] += self.ceyh[:,:,0] * ((self.H[:,:,0,0] - self.grid.H[:,:,-1,0])/self.kappa[2] + self.psiE[:,0,:,:,2,1]) #Ey
+                    self.E[:,:,0,0] -= self.cexh[:,:,0] * ((self.H[:,:,0,1] - self.grid.H[:,:,-1,1])/squeeze(self.kappa[...,2]) + self.psiE[:,:,0,2,0]) #Ex
+                    self.E[:,:,0,1] += self.ceyh[:,:,0] * ((self.H[:,:,0,0] - self.grid.H[:,:,-1,0])/squeeze(self.kappa[...,2]) + self.psiE[:,:,0,2,1]) #Ey
             else: #Transversal boundaries
-                #PML fields
-                self.E[:,:,0,0] -= self.cexh[:,:,0] * (self.H[:,:,0,1]/self.kappa[2] + self.psiE[:,:,0,2,0]) #Ex
-                self.E[:,:,0,1] += self.ceyh[:,:,0] * (self.H[:,:,0,0]/self.kappa[2] + self.psiE[:,:,0,2,1]) #Ey
+                self.E[:,:,0,0] -= self.cexh[:,:,0] * (self.H[:,:,0,1]/squeeze(self.kappa[...,2]) + self.psiE[:,:,0,2,0]) #Ex
+                self.E[:,:,0,1] += self.ceyh[:,:,0] * (self.H[:,:,0,0]/squeeze(self.kappa[...,2]) + self.psiE[:,:,0,2,1]) #Ey
+    
+    def update_E(self):
+        if self.orientation == "x":
+            self.grid.E[0,:,:,1] -= self.grid.ceyh[0,:,:] * (self.grid.H[0,:,:,2] - self.H[-1,:,:,2]) #Ey
+            self.grid.E[0,:,:,2] += self.grid.cezh[0,:,:] * (self.grid.H[0,:,:,1] - self.H[-1,:,:,1]) #Ez
+        elif self.orientation == "y":
+            self.grid.E[:,0,:,0] += self.grid.cexh[:,0,:] * (self.grid.H[:,0,:,2] - self.H[:,-1,:,2]) #Ex
+            self.grid.E[:,0,:,2] -= self.grid.cezh[:,0,:] * (self.grid.H[:,0,:,0] - self.H[:,-1,:,0]) #Ez
+        elif self.orientation == "z":
+            self.grid.E[:,:,0,0] -= self.grid.cexh[:,:,0] * (self.grid.H[:,:,0,1] - self.H[:,:,-1,1]) #Ex
+            self.grid.E[:,:,0,1] += self.grid.ceyh[:,:,0] * (self.grid.H[:,:,0,0] - self.H[:,:,-1,0]) #Ey

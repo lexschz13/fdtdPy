@@ -1,5 +1,5 @@
 from pylab import *
-VACUUM_LIGHT_SPEED = 299792458
+from .vacuum_constants import *
 
 
 def gaussian(t, **kwargs):
@@ -20,6 +20,7 @@ def saturation(t, **kwargs):
     w = 1 if not "width" in kwargs.keys() else kwargs["width"]
     p = 1 if not "pace" in kwargs.keys() else kwargs["pace"]
     result = 0 if t==0 else (p+1)/(p + exp(w/t))
+    return result
 
 
 def sinusoid(t, **kwargs):
@@ -47,10 +48,12 @@ class Source:
         self.grid = None
         
     def update_E(self, time):
-        time = self.correct_time(time)
         self.grid.E[self.slicing][...,0] += self.polarization[0] * self.amplitude * self.temp_func(time, **self.temp_func_params)[...,0]
         self.grid.E[self.slicing][...,1] += self.polarization[1] * self.amplitude * self.temp_func(time, **self.temp_func_params)[...,1]
         self.grid.E[self.slicing][...,2] += self.polarization[2] * self.amplitude * self.temp_func(time, **self.temp_func_params)[...,2]
+        #plot(self.temp_func(0.000007, **self.temp_func_params)[...,1].real, lw=0.75)
+        #show()
+        #quit()
     
     def correct_time(self, time):
         if not self.direction is None:
@@ -130,7 +133,7 @@ class RickerSource(Source):
 
 class SatSource(Source):
     def __init__(self, amplitude=1, polarization=[0,0,1], direction=None, frequency=0, shift=-pi/2, width=1, pace=1):
-        super().__init__(amplitude, polarization, temp_func=saturation, frequency=frequency, shift=shift, direction=direction, width=width, pace=pace)
+        super().__init__(amplitude, polarization, env_func=saturation, frequency=frequency, shift=shift, direction=direction, width=width, pace=pace)
     
     @property
     def width(self):

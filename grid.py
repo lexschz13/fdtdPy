@@ -3,7 +3,7 @@ import os
 from tempfile import mkdtemp
 from tqdm import tqdm
 
-
+from .vacuum_constants import *
 from .detector import Detector, tmpdir
 from .boundaries import Boundary
 from .sources import Source
@@ -23,9 +23,6 @@ elif nbits = 64:
     C_DATA = complex128
     F_DATA = float64
 """
-
-VACUUM_LIGHT_SPEED = 299792458
-VACUUM_IMPEDANCE = 376.7303
 
 
 
@@ -232,6 +229,9 @@ class Grid:
             
         for q in tqdm(range(time_steps)):
             self.update_H()
+            for bound_key in self.boundaries.keys():
+                if not self.boundaries[bound_key] is None:
+                    self.boundaries[bound_key].update_boundH()
             
             #Apply H boundaries
             if not self.boundaries["xH"] is None:
@@ -242,6 +242,9 @@ class Grid:
                 self.boundaries["zH"].update_H()
             
             self.update_E()
+            for bound_key in self.boundaries.keys():
+                if not self.boundaries[bound_key] is None:
+                    self.boundaries[bound_key].update_boundE()
             
             #Apply E boundaries
             if not self.boundaries["xE"] is None:
@@ -258,13 +261,25 @@ class Grid:
                 if q%d.capture_period == 0:
                     d.save_fields(q)
                 
+    def visualizeEx(self):
+        for d in self.detectors:
+            d.visualizeEx()
+    
     def visualizeEy(self):
         for d in self.detectors:
             d.visualizeEy()
     
+    def visualizeEz(self):
+        for d in self.detectors:
+            d.visualizeEz()
+    
     def visualizeHx(self):
         for d in self.detectors:
             d.visualizeHx()
+    
+    def visualizeHy(self):
+        for d in self.detectors:
+            d.visualizeHy()
     
     def visualizeHz(self):
         for d in self.detectors:

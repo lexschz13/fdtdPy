@@ -24,22 +24,22 @@ class Object:
 class Ellipsoid(Object):
     def gen_mask(self):
         mkx,mky,mkz = [zeros(self.grid.x.shape)]*3
-        if self.grid.Nx > 1:
+        if self.grid.Nx > 1 and self.x_axis != None:
             mkx += (self.grid.x - self.center[0])**2 / self.x_axis**2
-        if self.grid.Ny > 1:
+        if self.grid.Ny > 1 and self.y_axis != None:
             mky += (self.grid.y - self.center[1])**2 / self.y_axis**2
-        if self.grid.Nx > 1:
+        if self.grid.Nz > 1 and self.z_axis != None:
             mkz += (self.grid.z - self.center[2])**2 / self.z_axis**2
         self.slicing = where((mkx+mky+mkz)<=1)
 
 
-class Rectangle(Object):
+class Quadrilateral(Object):
     def gen_mask(self):
         mkx,mky,mkz = [True]*3
-        if self.grid.Nx > 1:
+        if self.grid.Nx > 1 and self.x_axis != None:
             mkx = (self.grid.x - self.center[0])**2 <= self.x_axis**2
-        if self.grid.Ny > 1:
+        if self.grid.Ny > 1 and self.y_axis != None:
             mky = (self.grid.y - self.center[1])**2 <= self.y_axis**2
-        if self.grid.Nx > 1:
+        if self.grid.Nz > 1 and self.z_axis != None:
             mkz = (self.grid.z - self.center[2])**2 <= self.z_axis**2
         self.slicing = where(mkx*mky*mkz)
