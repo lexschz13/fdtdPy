@@ -251,6 +251,10 @@ class Absorbing(Boundary):
 class PML(Boundary):
     def __init__(self, refractive_index=1, kappa=1, alpha=1, sigma=1, thickness=10, growing_step=1e-7):
         super().__init__()
+        self.previous_E = None #For own abs bounds
+        self.previous_H = None
+        self.adv_coeff = None
+        
         self.kappa = kappa
         self.alpha = alpha
         self.sigma = sigma
@@ -281,9 +285,36 @@ class PML(Boundary):
         self.psiE = None
         
         self.chxe, self.chye, self.chze, self.cexh, self.ceyh, self.cezh = [None]*6
+        self.adv_coeff = None
         
-        #Transversal boundaries will be considered mirrors
-    
+        self.prev_back_extxEy = None
+        self.prev_back_extxEz = None
+        self.prev_back_extyEx = None
+        self.prev_back_extyEz = None
+        self.prev_back_extzEx = None
+        self.prev_back_extzEy = None
+        
+        self.prev_trans_extxEy = None
+        self.prev_trans_extxEz = None
+        self.prev_trans_extyEx = None
+        self.prev_trans_extyEz = None
+        self.prev_trans_extzEx = None
+        self.prev_trans_extzEy = None
+        
+        self.prev_back_extxHy = None
+        self.prev_back_extxHz = None
+        self.prev_back_extyHx = None
+        self.prev_back_extyHz = None
+        self.prev_back_extzHx = None
+        self.prev_back_extzHy = None
+        
+        self.prev_trans_extxHy = None
+        self.prev_trans_extxHz = None
+        self.prev_trans_extyHx = None
+        self.prev_trans_extyHz = None
+        self.prev_trans_extzHx = None
+        self.prev_trans_extzHy = None
+        
     def set_coefs(self):
         #mu1/eps1 = mu2/eps2
         #nPML = sqrt(eps2*mu2)*c = eps2 * sqrt(mu1/eps1) * c = eps2/eps1 * ng  => eps2 = eps1 * nPML/ng  and  mu2 = mu1 * nPML/ng
@@ -309,9 +340,9 @@ class PML(Boundary):
         ng = self.grid.refractive_index[self.slicing].reshape(flat_sh)
         epsg = self.grid.permittivity[self.slicing].reshape(flat_sh)
         mug = self.grid.permeability[self.slicing].reshape(flat_sh)
-        nPML = self.refractive_index * ones((self.Nx, self.Ny, self.Nz, 1))
-        epsPML = epsg * nPML/ng
-        muPML = mug * nPML/ng
+        self.refractive_index *= ones((self.Nx, self.Ny, self.Nz, 3))
+        epsPML = epsg * self.refractive_index/ng
+        muPML = mug * self.refractive_index/ng
         
         self.chxe = self.grid.courant_number / muPML[...,0] / VACUUM_IMPEDANCE
         self.chye = self.grid.courant_number / muPML[...,1] / VACUUM_IMPEDANCE
@@ -319,6 +350,261 @@ class PML(Boundary):
         self.cexh = self.grid.courant_number / epsPML[...,0] * VACUUM_IMPEDANCE
         self.ceyh = self.grid.courant_number / epsPML[...,1] * VACUUM_IMPEDANCE
         self.cezh = self.grid.courant_number / epsPML[...,2] * VACUUM_IMPEDANCE
+        
+        reduced_courant = self.grid.courant_number/self.refractive_index
+        self.adv_coeff = (reduced_courant-1)/(reduced_courant+1)
+    
+    def back_extxEy(self, update_adv=False):
+        #Background boundary-x
+        extxEy = self.previous_E[-1,:,:,1] + self.adv_coeff[-1,:,:,1] * (self.E[-1,:,:,1] - self.prev_back_extxEy)
+        if update_adv: self.prev_back_extxEy = extxEy
+        return extxEy
+    
+    def back_extxEz(self, update_adv=False):
+        #Background boundary-x
+        extxEz = self.previous_E[-1,:,:,2] + self.adv_coeff[-1,:,:,2] * (self.E[-1,:,:,2] - self.prev_back_extxEz)
+        if update_adv: self.prev_back_extxEz = extxEz
+        return extxEz
+    
+    def back_extyEx(self, update_adv=False):
+        #Background boundary-y
+        extyEx = self.previous_E[:,-1,:,0] + self.adv_coeff[:,-1,:,0] * (self.E[:,-1,:,0] - self.prev_back_extyEx)
+        if update_adv: self.prev_back_extyEx = extyEx
+        return extyEx
+    
+    def back_extyEz(self, update_adv=False):
+        #Background boundary-y
+        extyEz = self.previous_E[:,-1,:,2] + self.adv_coeff[:,-1,:,2] * (self.E[:,-1,:,2] - self.prev_back_extyEz)
+        if update_adv: self.prev_back_extyEz = extyEz
+        return extyEz
+    
+    def back_extzEx(self, update_adv=False):
+        #Background boundary-z
+        extzEx = self.previous_E[:,:,-1,0] + self.adv_coeff[:,:,-1,0] * (self.E[:,:,-1,0] - self.prev_back_extzEx)
+        if update_adv: self.prev_back_extzEx = extzEx
+        return extzEx
+    
+    def back_extzEy(self, update_adv=False):
+        #Background boundary-z
+        extzEy = self.previous_E[:,:,-1,1] + self.adv_coeff[:,:,-1,1] * (self.E[:,:,-1,1] - self.prev_back_extzEy)
+        if update_adv: self.prev_back_extzEy = extzEy
+        return extzEy
+    
+    def back_extxHy(self, update_adv=False):
+        #Background boundary-x
+        extxHy = self.previous_H[0,:,:,1] + self.adv_coeff[0,:,:,1] * (self.H[0,:,:,1] - self.prev_back_extxHy)
+        if update_adv: self.prev_back_extxHy = extxHy
+        return extxHy
+    
+    def back_extxHz(self, update_adv=False):
+        #Background boundary-x
+        extxHz = self.previous_H[0,:,:,2] + self.adv_coeff[0,:,:,2] * (self.H[0,:,:,2] - self.prev_back_extxHz)
+        if update_adv: self.prev_back_extxHz = extxHz
+        return extxHz
+    
+    def back_extyHx(self, update_adv=False):
+        #Background boundary-y
+        extyHx = self.previous_H[:,0,:,0] + self.adv_coeff[:,0,:,0] * (self.H[:,0,:,0] - self.prev_back_extyHx)
+        if update_adv: self.prev_back_extyHx = extyHx
+        return extyHx
+    
+    def back_extyHz(self, update_adv=False):
+        #Background boundary-y
+        extyHz = self.previous_H[:,0,:,2] + self.adv_coeff[:,0,:,2] * (self.H[:,0,:,2] - self.prev_back_extyHz)
+        if update_adv: self.prev_back_extyHz = extyHz
+        return extyHz
+    
+    def back_extzHx(self, update_adv=False):
+        #Background boundary-z
+        extzHx = self.previous_H[:,:,0,0] + self.adv_coeff[:,:,0,0] * (self.H[:,:,0,0] - self.prev_back_extzHx)
+        if update_adv: self.prev_back_extzHx = extzHx
+        return extzHx
+    
+    def back_extzHy(self, update_adv=False):
+        #Background boundary-z
+        extzHy = self.previous_H[:,:,0,1] + self.adv_coeff[:,:,0,1] * (self.H[:,:,0,1] - self.prev_back_extzHy)
+        if update_adv: self.prev_back_extzHy = extzHy
+        return extzHy
+    
+    def trans_extxEy(self, update_adv=False):
+        #Transversal boundary-x
+        if isinstance(self.grid.boundaries["xH"], Periodic):
+            return self.E[0,:,:,1]
+        elif isinstance(self.grid.boundaries["xH"], Bloch):
+            a = self.grid.spatial_step * self.Nx
+            c = exp(-1j * (a*self.grid.boundaries["xH"].bloch_vector[0])) #Correction bloch factor
+            return c * self.E[0,:,:,1]
+        elif isinstance(self.grid.boundaries["xH"], Mirror):
+            return 0
+        elif isinstance(self.grid.boundaries["xH"], (Absorbing, PML)):
+            extxEy = self.previous_E[-1,:,:,1] + self.adv_coeff[-1,:,:,1] * (self.E[-1,:,:,1] - self.prev_trans_extxEy)
+            if update_adv: self.prev_trans_extxEy = extxEy
+            return extxEy
+    
+    def trans_extxEz(self, update_adv=False):
+        #Transversal boundary-x
+        if isinstance(self.grid.boundaries["xH"], Periodic):
+            return self.E[0,:,:,2]
+        elif isinstance(self.grid.boundaries["xH"], Bloch):
+            a = self.grid.spatial_step * self.Nx
+            c = exp(-1j * (a*self.grid.boundaries["xH"].bloch_vector[0])) #Correction bloch factor
+            return c * self.E[0,:,:,2]
+        elif isinstance(self.grid.boundaries["xH"], Mirror):
+            return 0
+        elif isinstance(self.grid.boundaries["xH"], (Absorbing, PML)):
+            extxEz = self.previous_E[-1,:,:,2] + self.adv_coeff[-1,:,:,2] * (self.E[-1,:,:,2] - self.prev_trans_extxEz)
+            if update_adv: self.prev_trans_extxEz = extxEz
+            return extxEz
+    
+    def trans_extyEx(self, update_adv=False):
+        #Transversal boundary-y
+        if isinstance(self.grid.boundaries["yH"], Periodic):
+            return self.E[:,0,:,0]
+        elif isinstance(self.grid.boundaries["yH"], Bloch):
+            a = self.grid.spatial_step * self.Ny
+            c = exp(-1j * (a*self.grid.boundaries["yH"].bloch_vector[1])) #Correction bloch factor
+            return c * self.E[:,0,:,0]
+        elif isinstance(self.grid.boundaries["yH"], Mirror):
+            return 0
+        elif isinstance(self.grid.boundaries["yH"], (Absorbing, PML)):
+            extyEx = self.previous_E[:,-1,:,0] + self.adv_coeff[:,-1,:,0] * (self.E[:,-1,:,0] - self.prev_trans_extyEx)
+            if update_adv: self.prev_trans_extyEx = extyEx
+            return extyEx
+    
+    def trans_extyEz(self, update_adv=False):
+        #Transversal boundary-y
+        if isinstance(self.grid.boundaries["yH"], Periodic):
+            return self.E[:,0,:,2]
+        elif isinstance(self.grid.boundaries["yH"], Bloch):
+            a = self.grid.spatial_step * self.Ny
+            c = exp(-1j * (a*self.grid.boundaries["yH"].bloch_vector[1])) #Correction bloch factor
+            return c * self.E[:,0,:,2]
+        elif isinstance(self.grid.boundaries["yH"], Mirror):
+            return 0
+        elif isinstance(self.grid.boundaries["yH"], (Absorbing, PML)):
+            extyEz = self.previous_E[:,-1,:,2] + self.adv_coeff[:,-1,:,2] * (self.E[:,-1,:,2] - self.prev_trans_extyEz)
+            if update_adv: self.prev_trans_extyEz = extyEz
+            return extyEz
+    
+    def trans_extzEx(self, update_adv=False):
+        #Transversal boundary-z
+        if isinstance(self.grid.boundaries["zH"], Periodic):
+            return self.E[:,:,0,0]
+        elif isinstance(self.grid.boundaries["zH"], Bloch):
+            a = self.grid.spatial_step * self.Ny
+            c = exp(-1j * (a*self.grid.boundaries["zH"].bloch_vector[2])) #Correction bloch factor
+            return c * self.E[:,:,0,0]
+        elif isinstance(self.grid.boundaries["zH"], Mirror):
+            return 0
+        elif isinstance(self.grid.boundaries["zH"], (Absorbing, PML)):
+            extzEx = self.previous_E[:,:,-1,0] + self.adv_coeff[:,:,-1,0] * (self.E[:,:,-1,0] - self.prev_trans_extzEx)
+            if update_adv: self.prev_trans_extzEx = extzEx
+            return extzEx
+    
+    def trans_extzEy(self, update_adv=False):
+        #Transversal boundary-z
+        if isinstance(self.grid.boundaries["zH"], Periodic):
+            return self.E[:,:,0,1]
+        elif isinstance(self.grid.boundaries["zH"], Bloch):
+            a = self.grid.spatial_step * self.Ny
+            c = exp(-1j * (a*self.grid.boundaries["zH"].bloch_vector[2])) #Correction bloch factor
+            return c * self.E[:,:,0,1]
+        elif isinstance(self.grid.boundaries["zH"], Mirror):
+            return 0
+        elif isinstance(self.grid.boundaries["zH"], (Absorbing, PML)):
+            extzEy = self.previous_E[:,:,-1,1] + self.adv_coeff[:,:,-1,1] * (self.E[:,:,-1,1] - self.prev_trans_extzEy)
+            if update_adv: self.prev_trans_extzEy = extzEy
+            return extzEy
+    
+    def trans_extxHy(self, update_adv=False):
+        #Transversal boundary-x
+        if isinstance(self.grid.boundaries["xE"], Periodic):
+            return self.H[-1,:,:,1]
+        elif isinstance(self.grid.boundaries["xE"], Bloch):
+            a = self.grid.spatial_step * self.Nx
+            c = exp(+1j * (a*self.grid.boundaries["xE"].bloch_vector[0])) #Correction bloch factor
+            return c * self.H[-1,:,:,1]
+        elif isinstance(self.grid.boundaries["xE"], Mirror):
+            return 0
+        elif isinstance(self.grid.boundaries["xE"], (Absorbing, PML)):
+            extxHy = self.previous_H[0,:,:,1] + self.adv_coeff[0,:,:,1] * (self.H[0,:,:,1] - self.prev_trans_extxHy)
+            if update_adv: self.prev_trans_extxHy = extxHy
+            return extxHy
+    
+    def trans_extxHz(self, update_adv=False):
+        #Transversal boundary-x
+        if isinstance(self.grid.boundaries["xE"], Periodic):
+            return self.H[-1,:,:,2]
+        elif isinstance(self.grid.boundaries["xE"], Bloch):
+            a = self.grid.spatial_step * self.Nx
+            c = exp(+1j * (a*self.grid.boundaries["xE"].bloch_vector[0])) #Correction bloch factor
+            return c * self.H[-1,:,:,2]
+        elif isinstance(self.grid.boundaries["xE"], Mirror):
+            return 0
+        elif isinstance(self.grid.boundaries["xE"], (Absorbing, PML)):
+            extxHz = self.previous_H[0,:,:,2] + self.adv_coeff[0,:,:,2] * (self.H[0,:,:,2] - self.prev_trans_extxHz)
+            if update_adv: self.prev_trans_extxHz = extxHz
+            return extxHz
+    
+    def trans_extyHx(self, update_adv=False):
+        #Transversal boundary-y
+        if isinstance(self.grid.boundaries["yE"], Periodic):
+            return self.H[:,-1,:,0]
+        elif isinstance(self.grid.boundaries["yE"], Bloch):
+            a = self.grid.spatial_step * self.Ny
+            c = exp(+1j * (a*self.grid.boundaries["yE"].bloch_vector[1])) #Correction bloch factor
+            return c * self.H[:,-1,:,0]
+        elif isinstance(self.grid.boundaries["yE"], Mirror):
+            return 0
+        elif isinstance(self.grid.boundaries["yE"], (Absorbing, PML)):
+            extyHx = self.previous_H[:,0,:,0] + self.adv_coeff[:,0,:,0] * (self.H[:,0,:,0] - self.prev_trans_extyHx)
+            if update_adv: self.prev_trans_extyHx = extyHx
+            return extyHx
+    
+    def trans_extyHz(self, update_adv=False):
+        #Transversal boundary-y
+        if isinstance(self.grid.boundaries["yE"], Periodic):
+            return self.H[:,-1,:,2]
+        elif isinstance(self.grid.boundaries["yE"], Bloch):
+            a = self.grid.spatial_step * self.Ny
+            c = exp(+1j * (a*self.grid.boundaries["yE"].bloch_vector[1])) #Correction bloch factor
+            return c * self.H[:,-1,:,2]
+        elif isinstance(self.grid.boundaries["yE"], Mirror):
+            return 0
+        elif isinstance(self.grid.boundaries["yE"], (Absorbing, PML)):
+            extyHz = self.previous_H[:,0,:,2] + self.adv_coeff[:,0,:,2] * (self.H[:,0,:,2] - self.prev_trans_extyHz)
+            if update_adv: self.prev_trans_extyHz = extyHz
+            return extyHz
+    
+    def trans_extzHx(self, update_adv=False):
+        #Transversal boundary-z
+        if isinstance(self.grid.boundaries["zE"], Periodic):
+            return self.H[:,:,-1,0]
+        elif isinstance(self.grid.boundaries["zE"], Bloch):
+            a = self.grid.spatial_step * self.Ny
+            c = exp(+1j * (a*self.grid.boundaries["zE"].bloch_vector[2])) #Correction bloch factor
+            return c * self.H[:,:,-1,0]
+        elif isinstance(self.grid.boundaries["zE"], Mirror):
+            return 0
+        elif isinstance(self.grid.boundaries["zE"], (Absorbing, PML)):
+            extzHx = self.previous_H[:,:,0,0] + self.adv_coeff[:,:,0,0] * (self.H[:,:,0,0] - self.prev_trans_extzHx)
+            if update_adv: self.prev_trans_extzHx = extzHx
+            return extzHx
+    
+    def trans_extzHy(self, update_adv=False):
+        #Transversal boundary-z
+        if isinstance(self.grid.boundaries["zE"], Periodic):
+            return self.H[:,:,-1,1]
+        elif isinstance(self.grid.boundaries["zE"], Bloch):
+            a = self.grid.spatial_step * self.Ny
+            c = exp(+1j * (a*self.grid.boundaries["zE"].bloch_vector[2])) #Correction bloch factor
+            return c * self.H[:,:,-1,1]
+        elif isinstance(self.grid.boundaries["zE"], Mirror):
+            return 0
+        elif isinstance(self.grid.boundaries["zE"], (Absorbing, PML)):
+            extzHy = self.previous_H[:,:,0,1] + self.adv_coeff[:,:,0,1] * (self.H[:,:,0,1] - self.prev_trans_extzHy)
+            if update_adv: self.prev_trans_extzHy = extzHy
+            return extzHy
     
     def poly(self):
         #Defines a cubic growth
@@ -333,19 +619,57 @@ class PML(Boundary):
             self.kappa = array([self.kappa,1,1])[None,None,None,:]
             self.sigma = array([self.sigma,0,0])[None,None,None,:] * self.poly()[:,None,None,None]
             self.Nx, self.Ny, self.Nz = self.thickness, self.grid.Ny, self.grid.Nz
+            self.prev_back_extxEy = zeros((self.Ny,self.Nz))
+            self.prev_back_extxEz = zeros((self.Ny,self.Nz))
+            self.prev_trans_extyEx = zeros((self.Nx,self.Nz))
+            self.prev_trans_extyEz = zeros((self.Nx,self.Nz))
+            self.prev_trans_extzEx = zeros((self.Nx,self.Ny))
+            self.prev_trans_extzEy = zeros((self.Nx,self.Ny))
+            self.prev_back_extxHy = zeros((self.Ny,self.Nz))
+            self.prev_back_extxHz = zeros((self.Ny,self.Nz))
+            self.prev_trans_extyHx = zeros((self.Nx,self.Nz))
+            self.prev_trans_extyHz = zeros((self.Nx,self.Nz))
+            self.prev_trans_extzHx = zeros((self.Nx,self.Ny))
+            self.prev_trans_extzHy = zeros((self.Nx,self.Ny))
         elif self.orientation == "y":
             self.kappa = array([1,self.kappa,1])[None,None,None,:]
             self.sigma = array([0,self.sigma,0])[None,None,None,:] * self.poly()[None,:,None,None]
             self.Nx, self.Ny, self.Nz = self.grid.Nx, self.thickness, self.grid.Nz
+            self.prev_back_extyEx = zeros((self.Nx,self.Nz))
+            self.prev_back_extyEz = zeros((self.Nx,self.Nz))
+            self.prev_trans_extxEy = zeros((self.Ny,self.Nz))
+            self.prev_trans_extxEz = zeros((self.Ny,self.Nz))
+            self.prev_trans_extzEx = zeros((self.Nx,self.Ny))
+            self.prev_trans_extzEy = zeros((self.Nx,self.Ny))
+            self.prev_back_extyHx = zeros((self.Nx,self.Nz))
+            self.prev_back_extyHz = zeros((self.Nx,self.Nz))
+            self.prev_trans_extxHy = zeros((self.Ny,self.Nz))
+            self.prev_trans_extxHz = zeros((self.Ny,self.Nz))
+            self.prev_trans_extzHx = zeros((self.Nx,self.Ny))
+            self.prev_trans_extzHy = zeros((self.Nx,self.Ny))
         elif self.orientation == "z":
             self.kappa = array([1,1,self.kappa])[None,None,None,:]
             self.sigma = array([0,0,self.sigma])[None,None,None,:] * self.poly()[None,None,:,None]
             self.Nx, self.Ny, self.Nz = self.grid.Nx, self.grid.Ny, self.thickness
+            self.prev_back_extzEx = zeros((self.Nx,self.Ny))
+            self.prev_back_extzEy = zeros((self.Nx,self.Ny))
+            self.prev_trans_extxEy = zeros((self.Ny,self.Nz))
+            self.prev_trans_extxEz = zeros((self.Ny,self.Nz))
+            self.prev_trans_extyEx = zeros((self.Nx,self.Nz))
+            self.prev_trans_extyEz = zeros((self.Nx,self.Nz))
+            self.prev_back_extzHx = zeros((self.Nx,self.Ny))
+            self.prev_back_extzHy = zeros((self.Nx,self.Ny))
+            self.prev_trans_extxHy = zeros((self.Ny,self.Nz))
+            self.prev_trans_extxHz = zeros((self.Ny,self.Nz))
+            self.prev_trans_extyHx = zeros((self.Nx,self.Nz))
+            self.prev_trans_extyHz = zeros((self.Nx,self.Nz))
         self.b = exp(-self.grid.time_pace/VACUUM_PERMITTIVITY * (self.alpha+self.sigma/self.kappa)) * ones((self.Nx,self.Ny,self.Nz,3))
         self.C = self.sigma/self.kappa / (self.sigma + self.kappa*self.alpha) * (self.b-1)
         F_TYPE = complex128 if self.grid.is_phasor else float64
         self.H = zeros((self.Nx, self.Ny, self.Nz, 3), dtype=F_TYPE)
         self.E = zeros((self.Nx, self.Ny, self.Nz, 3), dtype=F_TYPE)
+        self.previous_H = copy(self.H)
+        self.previous_E = copy(self.E)
         self.psiH = zeros((self.Nx, self.Ny, self.Nz, 3, 3), dtype=F_TYPE) #Shape of layer grid, derivative direction, field component
         self.psiE = zeros((self.Nx, self.Ny, self.Nz, 3, 3), dtype=F_TYPE)
         self.set_coefs()
@@ -360,12 +684,12 @@ class PML(Boundary):
                 if self.field == "E": #At low extreme of grid, -1 idx is joined to grid
                     self.psiH[-1,:,:,0,1] += self.C[-1,:,:,0] * (self.grid.E[0,:,:,2] - self.E[-1,:,:,2])
                     self.psiH[-1,:,:,0,2] += self.C[-1,:,:,0] * (self.grid.E[0,:,:,1] - self.E[-1,:,:,1])
-                elif self.field == "H": #At high extreme of grid, -1 idx is considered for total absortion
-                    self.psiH[-1,:,:,0,1] -= self.C[-1,:,:,0] * self.E[-1,:,:,2]
-                    self.psiH[-1,:,:,0,2] -= self.C[-1,:,:,0] * self.E[-1,:,:,1]
+                elif self.field == "H": #At high extreme of grid
+                    self.psiH[-1,:,:,0,1] += self.C[-1,:,:,0] * (self.back_extxEz(False) - self.E[-1,:,:,2])
+                    self.psiH[-1,:,:,0,2] += self.C[-1,:,:,0] * (self.back_extxEy(False) - self.E[-1,:,:,1])
             else: #Transversal boundaries
-                self.psiH[-1,:,:,0,1] -= self.C[-1,:,:,0] * self.E[-1,:,:,2]
-                self.psiH[-1,:,:,0,2] -= self.C[-1,:,:,0] * self.E[-1,:,:,1]
+                self.psiH[-1,:,:,0,1] += self.C[-1,:,:,0] * (self.trans_extxEz(False) - self.E[-1,:,:,2])
+                self.psiH[-1,:,:,0,2] += self.C[-1,:,:,0] * (self.trans_extxEy(False) - self.E[-1,:,:,1])
         if self.Ny > 1:
             self.psiH[:,:-1,:,1,0] += self.C[:,:-1,:,1] * (self.E[:,1:,:,2] - self.E[:,:-1,:,2])
             self.psiH[:,:-1,:,1,2] += self.C[:,:-1,:,1] * (self.E[:,1:,:,0] - self.E[:,:-1,:,0])
@@ -374,12 +698,12 @@ class PML(Boundary):
                 if self.field == "E": #At low extreme of grid, -1 idx is joined to grid
                     self.psiH[:,-1,:,1,0] += self.C[:,-1,:,1] * (self.grid.E[:,0,:,2] - self.E[:,-1,:,2])
                     self.psiH[:,-1,:,1,2] += self.C[:,-1,:,1] * (self.grid.E[:,0,:,0] - self.E[:,-1,:,0])
-                elif self.field == "H": #At high extreme of grid, -1 idx is considered for total absortion
-                    self.psiH[:,-1,:,1,0] -= self.C[:,-1,:,1] * self.E[:,-1,:,2]
-                    self.psiH[:,-1,:,1,2] -= self.C[:,-1,:,1] * self.E[:,-1,:,0]
+                elif self.field == "H": #At high extreme of grid
+                    self.psiH[:,-1,:,1,0] += self.C[:,-1,:,1] * (self.back_extyEz(False) - self.E[:,-1,:,2])
+                    self.psiH[:,-1,:,1,2] += self.C[:,-1,:,1] * (self.back_extyEx(False) - self.E[:,-1,:,0])
             else: #Transveral boundaries
-                self.psiH[:,-1,:,1,0] -= self.C[:,-1,:,1] * self.E[:,-1,:,2]
-                self.psiH[:,-1,:,1,2] -= self.C[:,-1,:,1] * self.E[:,-1,:,0]
+                self.psiH[:,-1,:,1,0] += self.C[:,-1,:,1] * (self.trans_extyEz(False) - self.E[:,-1,:,2])
+                self.psiH[:,-1,:,1,2] += self.C[:,-1,:,1] * (self.trans_extyEx(False) - self.E[:,-1,:,0])
         if self.Nz > 1:
             self.psiH[:,:,:-1,2,0] += self.C[:,:,:-1,2] * (self.E[:,:,1:,1] - self.E[:,:,:-1,1])
             self.psiH[:,:,:-1,2,1] += self.C[:,:,:-1,2] * (self.E[:,:,1:,0] - self.E[:,:,:-1,0])
@@ -388,12 +712,12 @@ class PML(Boundary):
                 if self.field == "E": #At low extreme of grid, -1 idx is joined to grid
                     self.psiH[:,:,-1,2,0] += self.C[:,:,-1,2] * (self.grid.E[:,:,0,1] - self.E[:,:,-1,1])
                     self.psiH[:,:,-1,2,1] += self.C[:,:,-1,2] * (self.grid.E[:,:,0,0] - self.E[:,:,-1,0])
-                elif self.field == "H": #At high extreme of grid, -1 idx is considered for total absortion
-                    self.psiH[:,:,-1,2,0] -= self.C[:,:,-1,2] * self.E[:,:,-1,1]
-                    self.psiH[:,:,-1,2,1] -= self.C[:,:,-1,2] * self.E[:,:,-1,0]
+                elif self.field == "H": #At high extreme of grid
+                    self.psiH[:,:,-1,2,0] += self.C[:,:,-1,2] * (self.back_extzEy(False) - self.E[:,:,-1,1])
+                    self.psiH[:,:,-1,2,1] += self.C[:,:,-1,2] * (self.back_extzEx(False) - self.E[:,:,-1,0])
             else: #Transversal boundaries
-                self.psiH[:,:,-1,2,0] -= self.C[:,:,-1,2] * self.E[:,:,-1,1]
-                self.psiH[:,:,-1,2,1] -= self.C[:,:,-1,2] * self.E[:,:,-1,0]
+                self.psiH[:,:,-1,2,0] += self.C[:,:,-1,2] * (self.trans_extzEy(False) - self.E[:,:,-1,1])
+                self.psiH[:,:,-1,2,1] += self.C[:,:,-1,2] * (self.trans_extzEx(False) - self.E[:,:,-1,0])
     
     def update_boundH(self):
         self.update_psiH()
@@ -406,12 +730,12 @@ class PML(Boundary):
                 if self.field == "E": #At low extreme of grid, -1 idx is joined to grid
                     self.H[-1,:,:,1] += self.chye[-1,:,:] * ((self.grid.E[0,:,:,2] - self.E[-1,:,:,2])/squeeze(self.kappa[...,0]) + self.psiH[-1,:,:,0,1]) #Hy
                     self.H[-1,:,:,2] -= self.chze[-1,:,:] * ((self.grid.E[0,:,:,1] - self.E[-1,:,:,1])/squeeze(self.kappa[...,0]) + self.psiH[-1,:,:,0,2]) #Hz
-                elif self.field == "H": #At high extreme of grid, -1 idx is considered for total absortion
-                    self.H[-1,:,:,1] += self.chye[-1,:,:] * (-self.E[-1,:,:,2]/squeeze(self.kappa[...,0]) + self.psiH[-1,:,:,0,1]) #Hy
-                    self.H[-1,:,:,2] -= self.chze[-1,:,:] * (-self.E[-1,:,:,1]/squeeze(self.kappa[...,0]) + self.psiH[-1,:,:,0,2]) #Hz
+                elif self.field == "H": #At high extreme of grid
+                    self.H[-1,:,:,1] += self.chye[-1,:,:] * ((self.back_extxEz(True) - self.E[-1,:,:,2])/squeeze(self.kappa[...,0]) + self.psiH[-1,:,:,0,1]) #Hy
+                    self.H[-1,:,:,2] -= self.chze[-1,:,:] * ((self.back_extxEy(True) - self.E[-1,:,:,1])/squeeze(self.kappa[...,0]) + self.psiH[-1,:,:,0,2]) #Hz
             else: #Transversal boundaries
-                self.H[-1,:,:,1] += self.chye[-1,:,:] * (-self.E[-1,:,:,2]/squeeze(self.kappa[...,0]) + self.psiH[-1,:,:,0,1]) #Hy
-                self.H[-1,:,:,2] -= self.chze[-1,:,:] * (-self.E[-1,:,:,1]/squeeze(self.kappa[...,0]) + self.psiH[-1,:,:,0,2]) #Hz
+                self.H[-1,:,:,1] += self.chye[-1,:,:] * ((self.trans_extxEz(True) - self.E[-1,:,:,2])/squeeze(self.kappa[...,0]) + self.psiH[-1,:,:,0,1]) #Hy
+                self.H[-1,:,:,2] -= self.chze[-1,:,:] * ((self.trans_extxEy(True) -self.E[-1,:,:,1])/squeeze(self.kappa[...,0]) + self.psiH[-1,:,:,0,2]) #Hz
         
         #Update on y axis
         if self.Ny > 1:
@@ -422,12 +746,12 @@ class PML(Boundary):
                 if self.field == "E": #At low extreme of grid, -1 idx is joined to grid
                     self.H[:,-1,:,0] -= self.chxe[:,-1,:] * ((self.grid.E[:,0,:,2] - self.E[:,-1,:,2])/squeeze(self.kappa[...,1]) + self.psiH[:,-1,:,1,0]) #Hx
                     self.H[:,-1,:,2] += self.chze[:,-1,:] * ((self.grid.E[:,0,:,0] - self.E[:,-1,:,0])/squeeze(self.kappa[...,1]) + self.psiH[:,-1,:,1,2]) #Hz
-                elif self.field == "H": #At high extreme of grid, -1 idx is considered for total absortion
-                    self.H[:,-1,:,0] -= self.chxe[:,-1,:] * (-self.E[:,-1,:,2]/squeeze(self.kappa[...,1]) + self.psiH[:,-1,:,1,0]) #Hx
-                    self.H[:,-1,:,2] += self.chze[:,-1,:] * (-self.E[:,-1,:,0]/squeeze(self.kappa[...,1]) + self.psiH[:,-1,:,1,2]) #Hz
+                elif self.field == "H": #At high extreme of grid
+                    self.H[:,-1,:,0] -= self.chxe[:,-1,:] * ((self.back_extyEz(True) - self.E[:,-1,:,2])/squeeze(self.kappa[...,1]) + self.psiH[:,-1,:,1,0]) #Hx
+                    self.H[:,-1,:,2] += self.chze[:,-1,:] * ((self.back_extyEx(True) - self.E[:,-1,:,0])/squeeze(self.kappa[...,1]) + self.psiH[:,-1,:,1,2]) #Hz
             else: #Transversal boundaries
-                self.H[:,-1,:,0] -= self.chxe[:,-1,:] * (-self.E[:,-1,:,2]/squeeze(self.kappa[...,1]) + self.psiH[:,-1,:,1,0]) #Hx
-                self.H[:,-1,:,2] += self.chze[:,-1,:] * (-self.E[:,-1,:,0]/squeeze(self.kappa[...,1]) + self.psiH[:,-1,:,1,2]) #Hz
+                self.H[:,-1,:,0] -= self.chxe[:,-1,:] * ((self.trans_extyEz(True) - self.E[:,-1,:,2])/squeeze(self.kappa[...,1]) + self.psiH[:,-1,:,1,0]) #Hx
+                self.H[:,-1,:,2] += self.chze[:,-1,:] * ((self.trans_extyEx(True) - self.E[:,-1,:,0])/squeeze(self.kappa[...,1]) + self.psiH[:,-1,:,1,2]) #Hz
         
         #Update on z axis
         if self.Nz > 1:
@@ -438,12 +762,14 @@ class PML(Boundary):
                 if self.field == "E": #At low extreme of grid, -1 idx is joined to grid
                     self.H[:,:,-1,0] += self.chxe[:,:,-1] * ((self.grid.E[:,:,0,1] - self.E[:,:,-1,1])/squeeze(self.kappa[...,2]) + self.psiH[:,:,-1,2,0]) #Hx
                     self.H[:,:,-1,1] -= self.chye[:,:,-1] * ((self.grid.E[:,:,0,0] - self.E[:,:,-1,0])/squeeze(self.kappa[...,2]) + self.psiH[:,:,-1,2,1]) #Hy
-                elif self.field == "H": #At high extreme of grid, -1 idx is considered for total absortion
-                    self.H[:,:,-1,0] += self.chxe[:,:,-1] * (-self.E[:,:,-1,1]/squeeze(self.kappa[...,2]) + self.psiH[:,:,-1,2,0]) #Hx
-                    self.H[:,:,-1,1] -= self.chye[:,:,-1] * (-self.E[:,:,-1,0]/squeeze(self.kappa[...,2]) + self.psiH[:,:,-1,2,1]) #Hy
+                elif self.field == "H": #At high extreme of grid
+                    self.H[:,:,-1,0] += self.chxe[:,:,-1] * ((self.back_extzEy(True) - self.E[:,:,-1,1])/squeeze(self.kappa[...,2]) + self.psiH[:,:,-1,2,0]) #Hx
+                    self.H[:,:,-1,1] -= self.chye[:,:,-1] * ((self.back_extzEx(True) - self.E[:,:,-1,0])/squeeze(self.kappa[...,2]) + self.psiH[:,:,-1,2,1]) #Hy
             else: #Transversal boundaries
-                self.H[:,:,-1,0] += self.chxe[:,:,-1] * (-self.E[:,:,-1,1]/squeeze(self.kappa[...,2]) + self.psiH[:,:,-1,2,0]) #Hx
-                self.H[:,:,-1,1] -= self.chye[:,:,-1] * (-self.E[:,:,-1,0]/squeeze(self.kappa[...,2]) + self.psiH[:,:,-1,2,1]) #Hy
+                self.H[:,:,-1,0] += self.chxe[:,:,-1] * ((self.trans_extzEy(True) - self.E[:,:,-1,1])/squeeze(self.kappa[...,2]) + self.psiH[:,:,-1,2,0]) #Hx
+                self.H[:,:,-1,1] -= self.chye[:,:,-1] * ((self.trans_extzEy(True) - self.E[:,:,-1,0])/squeeze(self.kappa[...,2]) + self.psiH[:,:,-1,2,1]) #Hy
+        
+        self.previous_H = copy(self.H)
     
     def update_H(self):
         if self.orientation == "x":
@@ -464,15 +790,15 @@ class PML(Boundary):
             self.psiE[1:,:,:,0,2] += self.C[1:,:,:,0] * (self.H[1:,:,:,1] - self.H[:-1,:,:,1])
             #Boundaries
             if self.orientation == "x": #Normal boundaries
-                if self.field == "E": #At low extreme of grid, 0 idx is considered for total absortion
-                    self.psiE[0,:,:,0,1] += self.C[0,:,:,0] * self.H[0,:,:,2]
-                    self.psiE[0,:,:,0,2] += self.C[0,:,:,0] * self.H[0,:,:,1]
+                if self.field == "E": #At low extreme of grid
+                    self.psiE[0,:,:,0,1] += self.C[0,:,:,0] * (self.H[0,:,:,2] - self.back_extxHz(False))
+                    self.psiE[0,:,:,0,2] += self.C[0,:,:,0] * (self.H[0,:,:,1] - self.back_extxHy(False))
                 elif self.field == "H": #At high extreme of grid, 0 idx is joined to grid
                     self.psiE[0,:,:,0,1] += self.C[0,:,:,0] * (self.H[0,:,:,2] - self.grid.H[-1,:,:,2])
                     self.psiE[0,:,:,0,2] += self.C[0,:,:,0] * (self.H[0,:,:,1] - self.grid.H[-1,:,:,1])
             else: #Transversal boundaries
-                self.psiE[0,:,:,0,1] += self.C[0,:,:,0] * self.H[0,:,:,2]
-                self.psiE[0,:,:,0,2] += self.C[0,:,:,0] * self.H[0,:,:,1]
+                self.psiE[0,:,:,0,1] += self.C[0,:,:,0] * (self.H[0,:,:,2] - self.trans_extxHz(False))
+                self.psiE[0,:,:,0,2] += self.C[0,:,:,0] * (self.H[0,:,:,1] - self.trans_extxHy(False))
         
         #Update on y axis
         if self.Ny > 1:
@@ -480,15 +806,15 @@ class PML(Boundary):
             self.psiE[:,1:,:,1,2] += self.C[:,1:,:,1] * (self.H[:,1:,:,0] - self.H[:,:-1,:,0])
             #Boundaries
             if self.orientation == "y": #Normal boundaries
-                if self.field == "E": #At low extreme of grid, 0 idx is considered for total absortion
-                    self.psiE[:,0,:,1,0] += self.C[:,0,:,1] * self.H[:,0,:,2]
-                    self.psiE[:,0,:,1,2] += self.C[:,0,:,1] * self.H[:,0,:,0]
+                if self.field == "E": #At low extreme of grid
+                    self.psiE[:,0,:,1,0] += self.C[:,0,:,1] * (self.H[:,0,:,2] - self.back_extyHz(False))
+                    self.psiE[:,0,:,1,2] += self.C[:,0,:,1] * (self.H[:,0,:,0] - self.back_extyHx(False))
                 elif self.field == "H": #At high extreme of grid, 0 idx is joined to grid
                     self.psiE[:,0,:,1,0] += self.C[:,0,:,1] * (self.H[:,0,:,2] - self.grid.H[:,-1,:,2])
                     self.psiE[:,0,:,1,2] += self.C[:,0,:,1] * (self.H[:,0,:,0] - self.grid.H[:,-1,:,0])
             else: #Transversal boundaries
-                self.psiE[:,0,:,1,0] += self.C[:,0,:,1] * self.H[:,0,:,2]
-                self.psiE[:,0,:,1,2] += self.C[:,0,:,1] * self.H[:,0,:,0]
+                self.psiE[:,0,:,1,0] += self.C[:,0,:,1] * (self.H[:,0,:,2] - self.trans_extyHz(False))
+                self.psiE[:,0,:,1,2] += self.C[:,0,:,1] * (self.H[:,0,:,0] - self.trans_extyHx(False))
         
         #Update on z axis
         if self.Nz > 1:
@@ -496,15 +822,15 @@ class PML(Boundary):
             self.psiE[:,:,1:,2,1] += self.C[:,:,1:,2] * (self.H[:,:,1:,0] - self.H[:,:,:-1,0])
             #Boundaries
             if self.orientation == "z": #Normal boundaries
-                if self.field == "E": #At low extreme of grid, 0 idx is considered for total absortion
-                    self.psiE[:,:,0,2,0] += self.C[:,:,0,2] * self.H[:,:,0,1]
-                    self.psiE[:,:,0,2,1] += self.C[:,:,0,2] * self.H[:,:,0,0]
+                if self.field == "E": #At low extreme of grid
+                    self.psiE[:,:,0,2,0] += self.C[:,:,0,2] * (self.H[:,:,0,1] - self.back_extzHy(False))
+                    self.psiE[:,:,0,2,1] += self.C[:,:,0,2] * (self.H[:,:,0,0] - self.back_extzHx(False))
                 elif self.field == "H": #At high extreme of grid, 0 idx is joined to grid
                     self.psiE[:,:,0,2,0] += self.C[:,:,0,2] * (self.H[:,:,0,1] - self.grid.H[:,:,-1,1])
                     self.psiE[:,:,0,2,1] += self.C[:,:,0,2] * (self.H[:,:,0,0] - self.grid.H[:,:,-1,0])
             else: #Transversal boundaries
-                self.psiE[:,:,0,2,0] += self.C[:,:,0,2] * self.H[:,:,0,1]
-                self.psiE[:,:,0,2,1] += self.C[:,:,0,2] * self.H[:,:,0,0]
+                self.psiE[:,:,0,2,0] += self.C[:,:,0,2] * (self.H[:,:,0,1] - self.trans_extzHy(False))
+                self.psiE[:,:,0,2,1] += self.C[:,:,0,2] * (self.H[:,:,0,0] - self.trans_extzHx(False))
     
     def update_boundE(self):
         self.update_psiE()
@@ -514,15 +840,15 @@ class PML(Boundary):
             self.E[1:,:,:,2] += self.cezh[1:,:,:] * ((self.H[1:,:,:,1] - self.H[:-1,:,:,1])/squeeze(self.kappa[...,0]) + self.psiE[1:,:,:,0,2]) #Ez
             #Boundaries
             if self.orientation == "x": #Normal boundaries
-                if self.field == "E": #At low extreme of grid, 0 idx is considered for total absortion
-                    self.E[0,:,:,1] -= self.ceyh[0,:,:] * (self.H[0,:,:,2]/squeeze(self.kappa[...,0]) + self.psiE[0,:,:,0,1]) #Ey
-                    self.E[0,:,:,2] += self.cezh[0,:,:] * (self.H[0,:,:,1]/squeeze(self.kappa[...,0]) + self.psiE[0,:,:,0,2]) #Ez
+                if self.field == "E": #At low extreme of grid
+                    self.E[0,:,:,1] -= self.ceyh[0,:,:] * ((self.H[0,:,:,2] - self.back_extxHz(True))/squeeze(self.kappa[...,0]) + self.psiE[0,:,:,0,1]) #Ey
+                    self.E[0,:,:,2] += self.cezh[0,:,:] * ((self.H[0,:,:,1] - self.back_extxHy(True))/squeeze(self.kappa[...,0]) + self.psiE[0,:,:,0,2]) #Ez
                 elif self.field == "H": #At high extreme of grid, 0 idx is joined to grid
                     self.E[0,:,:,1] -= self.ceyh[0,:,:] * ((self.H[0,:,:,2] - self.grid.H[-1,:,:,2])/squeeze(self.kappa[...,0]) + self.psiE[0,:,:,0,1]) #Ey
                     self.E[0,:,:,2] += self.cezh[0,:,:] * ((self.H[0,:,:,1] - self.grid.H[-1,:,:,1])/squeeze(self.kappa[...,0]) + self.psiE[0,:,:,0,2]) #Ey
             else: #Transversal boundaries
-                self.E[0,:,:,1] -= self.ceyh[0,:,:] * (self.H[0,:,:,2]/squeeze(self.kappa[...,0]) + self.psiE[0,:,:,0,1]) #Ey
-                self.E[0,:,:,2] += self.cezh[0,:,:] * (self.H[0,:,:,1]/squeeze(self.kappa[...,0]) + self.psiE[0,:,:,0,2]) #Ez
+                self.E[0,:,:,1] -= self.ceyh[0,:,:] * ((self.H[0,:,:,2] - self.trans_extxHz(True))/squeeze(self.kappa[...,0]) + self.psiE[0,:,:,0,1]) #Ey
+                self.E[0,:,:,2] += self.cezh[0,:,:] * ((self.H[0,:,:,1] - self.trans_extxHy(True))/squeeze(self.kappa[...,0]) + self.psiE[0,:,:,0,2]) #Ez
         
         #Update on y axis
         if self.Ny > 1:
@@ -530,15 +856,15 @@ class PML(Boundary):
             self.E[:,1:,:,2] -= self.cezh[:,1:,:] * ((self.H[:,1:,:,0] - self.H[:,:-1,:,0])/squeeze(self.kappa[...,1]) + self.psiE[:,1:,:,1,2]) #Ez
             #Boundaries
             if self.orientation == "y": #Normal boundaries
-                if self.field == "E": #At low extreme of grid, 0 idx is considered for total absortion
-                    self.E[:,0,:,0] += self.cexh[:,0,:] * (self.H[:,0,:,2]/squeeze(self.kappa[...,1]) + self.psiE[:,0,:,1,0]) #Ex
-                    self.E[:,0,:,2] -= self.cezh[:,0,:] * (self.H[:,0,:,0]/squeeze(self.kappa[...,1]) + self.psiE[:,0,:,1,2]) #Ez
+                if self.field == "E": #At low extreme of grid
+                    self.E[:,0,:,0] += self.cexh[:,0,:] * ((self.H[:,0,:,2] - self.back_extyHz(True))/squeeze(self.kappa[...,1]) + self.psiE[:,0,:,1,0]) #Ex
+                    self.E[:,0,:,2] -= self.cezh[:,0,:] * ((self.H[:,0,:,0] - self.back_extyHx(True))/squeeze(self.kappa[...,1]) + self.psiE[:,0,:,1,2]) #Ez
                 elif self.field == "H": #At high extreme of grid, 0 idx is joined to grid
                     self.E[:,0,:,0] += self.cexh[:,0,:] * ((self.H[:,0,:,2] - self.grid.H[:,-1,:,2])/squeeze(self.kappa[...,1]) + self.psiE[:,0,:,1,0]) #Ex
                     self.E[:,0,:,2] -= self.cezh[:,0,:] * ((self.H[:,0,:,0] - self.grid.H[:,-1,:,0])/squeeze(self.kappa[...,1]) + self.psiE[:,0,:,1,2]) #Ez
             else: #Transversal boundaries
-                self.E[:,0,:,0] += self.cexh[:,0,:] * (self.H[:,0,:,2]/squeeze(self.kappa[...,1]) + self.psiE[:,0,:,1,0]) #Ex
-                self.E[:,0,:,2] -= self.cezh[:,0,:] * (self.H[:,0,:,0]/squeeze(self.kappa[...,1]) + self.psiE[:,0,:,1,2]) #Ez
+                self.E[:,0,:,0] += self.cexh[:,0,:] * ((self.H[:,0,:,2] - self.trans_extyHz(True))/squeeze(self.kappa[...,1]) + self.psiE[:,0,:,1,0]) #Ex
+                self.E[:,0,:,2] -= self.cezh[:,0,:] * ((self.H[:,0,:,0] - self.trans_extyHx(True))/squeeze(self.kappa[...,1]) + self.psiE[:,0,:,1,2]) #Ez
         
         #Update on z axis
         if self.Nz > 1:
@@ -546,15 +872,17 @@ class PML(Boundary):
             self.E[:,:,1:,1] += self.ceyh[:,:,1:] * ((self.H[:,:,1:,0] - self.H[:,:,:-1,0])/squeeze(self.kappa[...,2]) + self.psiE[:,:,1:,2,1]) #Ey
             #Boundaries
             if self.orientation == "z": #Normal boundaries
-                if self.field == "E": #At low extreme of grid, 0 idx is considered for total absortion
-                    self.E[:,:,0,0] -= self.cexh[:,:,0] * (self.H[:,:,0,1]/squeeze(self.kappa[...,2]) + self.psiE[:,:,0,2,0]) #Ex
-                    self.E[:,:,0,1] += self.ceyh[:,:,0] * (self.H[:,:,0,0]/squeeze(self.kappa[...,2]) + self.psiE[:,:,0,2,1]) #Ey
+                if self.field == "E": #At low extreme of grid
+                    self.E[:,:,0,0] -= self.cexh[:,:,0] * ((self.H[:,:,0,1] - self.back_extzHy(True))/squeeze(self.kappa[...,2]) + self.psiE[:,:,0,2,0]) #Ex
+                    self.E[:,:,0,1] += self.ceyh[:,:,0] * ((self.H[:,:,0,0] - self.back_extzHx(True))/squeeze(self.kappa[...,2]) + self.psiE[:,:,0,2,1]) #Ey
                 elif self.field == "H": #At high extreme of grid, 0 idx is joined to grid
                     self.E[:,:,0,0] -= self.cexh[:,:,0] * ((self.H[:,:,0,1] - self.grid.H[:,:,-1,1])/squeeze(self.kappa[...,2]) + self.psiE[:,:,0,2,0]) #Ex
                     self.E[:,:,0,1] += self.ceyh[:,:,0] * ((self.H[:,:,0,0] - self.grid.H[:,:,-1,0])/squeeze(self.kappa[...,2]) + self.psiE[:,:,0,2,1]) #Ey
             else: #Transversal boundaries
-                self.E[:,:,0,0] -= self.cexh[:,:,0] * (self.H[:,:,0,1]/squeeze(self.kappa[...,2]) + self.psiE[:,:,0,2,0]) #Ex
-                self.E[:,:,0,1] += self.ceyh[:,:,0] * (self.H[:,:,0,0]/squeeze(self.kappa[...,2]) + self.psiE[:,:,0,2,1]) #Ey
+                self.E[:,:,0,0] -= self.cexh[:,:,0] * ((self.H[:,:,0,1] - self.trans_extzHy(True))/squeeze(self.kappa[...,2]) + self.psiE[:,:,0,2,0]) #Ex
+                self.E[:,:,0,1] += self.ceyh[:,:,0] * ((self.H[:,:,0,0] - self.trans_extzHx(True))/squeeze(self.kappa[...,2]) + self.psiE[:,:,0,2,1]) #Ey
+        
+        self.previous_E = copy(self.E)
     
     def update_E(self):
         if self.orientation == "x":
