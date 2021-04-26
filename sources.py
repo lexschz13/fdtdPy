@@ -1,5 +1,6 @@
 from pylab import *
 from .vacuum_constants import *
+from .tsfs import TFSF
 
 
 def gaussian(t, **kwargs):
@@ -42,6 +43,9 @@ class Source:
         self.temp_func_params = kwargs
         self.temp_func_params.update({"frequency":frequency, "shift":shift})
         self.direction = direction
+        
+        self.tfsf_for  = None
+        self.tfsf_back = None
         
         self.slicing = None
         
