@@ -1,6 +1,6 @@
 from pylab import *
 from .vacuum_constants import *
-from .tsfs import TFSF
+from .tfsf import TFSF
 
 
 def gaussian(t, **kwargs):
@@ -36,7 +36,7 @@ def sinusoid(t, **kwargs):
 
 
 class Source:
-    def __init__(self, amplitude=1, polarization=[0,0,1], env_func=gaussian, direction=None, frequency=0, shift=-pi/2, **kwargs):
+    def __init__(self, amplitude=1, polarization=[0,0,1], env_func=gaussian, direction=None, frequency=0, shift=-pi/2, tfsf_for_d = None, tfsf_back_d = None, **kwargs):
         self.amplitude = amplitude 
         self.polarization = polarization
         self.envelope_func = env_func
@@ -44,7 +44,15 @@ class Source:
         self.temp_func_params.update({"frequency":frequency, "shift":shift})
         self.direction = direction
         
-        self.tfsf_for  = None
+        if tfsf_for_d < 0:
+            raise ValueError("Distance for forward TFSF has to be positive or 0")
+            quite()
+        self.tfsf_for_d  = tfsf_for_d
+        self.tfsf_for = None
+        if tfsf_back_d >= 0:
+            raise ValueError("Distance for forward TFSF has to be negative")
+            quite()
+        self.tfsf_back_d = tfsf_back_d
         self.tfsf_back = None
         
         self.slicing = None
@@ -55,17 +63,25 @@ class Source:
         self.grid.E[self.slicing][...,0] += self.polarization[0] * self.amplitude * self.temp_func(time, **self.temp_func_params)[...,0]
         self.grid.E[self.slicing][...,1] += self.polarization[1] * self.amplitude * self.temp_func(time, **self.temp_func_params)[...,1]
         self.grid.E[self.slicing][...,2] += self.polarization[2] * self.amplitude * self.temp_func(time, **self.temp_func_params)[...,2]
-        #plot(self.temp_func(0.000007, **self.temp_func_params)[...,1].real, lw=0.75)
-        #show()
-        #quit()
     
     def correct_time(self, time):
         if not self.direction is None:
-            return time - self.grid.refractive_index[self.slicing]/VACUUM_LIGHT_SPEED * (self.direction[0]*self.grid.x[self.slicing][...,None] +
-                                                                           self.direction[1]*self.grid.y[self.slicing][...,None] +
-                                                                           self.direction[2]*self.grid.z[self.slicing][...,None])
+            return time - self.grid.refractive_index[self.slicing]/VACUUM_LIGHT_SPEED * (
+                            self.direction[0]*self.grid.x[self.slicing][...,None] +
+                            self.direction[1]*self.grid.y[self.slicing][...,None] +
+                            self.direction[2]*self.grid.z[self.slicing][...,None])
         else:
             return time * array([1,1,1])
+    
+    def check_tfsf(self):
+        if self.tfsf_for_d is None and self.tfsf_back_d is None and (self.grid.sources[0].tfsf_for!=None or self.grid.sources[0].tfsf_back!=None):
+            raise AssertionError("Only one source if TFSF is used")
+            quit()
+        if (self.self.tfsf_for_d != None or self.tfsf_back_d != None) and len(self.grid.sources) >= 1:
+            raise AssertionError("Only one source if TFSF is used")
+            quit()
+        self.tfsf_for = TFSF(self, self.tfsf_for_d)
+        self.tfsf_back = TFSF(self, self.tfsf_back_d)
     
     def add_params(self):
         self.temp_func_params.update({"is_phasor":self.grid.is_phasor})

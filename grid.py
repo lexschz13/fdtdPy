@@ -150,6 +150,7 @@ class Grid:
         source.grid = self
         source.slicing = slicing
         source.add_params()
+        source.check_tfsf()
         self.sources += [source]
     
     def add_detector(self, detector, slicing):
@@ -241,6 +242,14 @@ class Grid:
             if not self.boundaries["zH"] is None:
                 self.boundaries["zH"].update_H()
             
+            #TFSF
+            if len(self.sources) == 1:
+                src = self.sources[0]
+                if src.tfsf_for != None:
+                    src.tfsf_for.update_H(q * self.time_pace)
+                if src.tfsf_back != None:
+                    src.tfsf_back.update_H(q * self.time_pace)
+            
             self.update_E()
             for bound_key in self.boundaries.keys():
                 if not self.boundaries[bound_key] is None:
@@ -254,6 +263,7 @@ class Grid:
             if not self.boundaries["zE"] is None:
                 self.boundaries["zE"].update_E()
             
+            #Injection
             for source in self.sources:
                 source.update_E(q * self.time_pace)
             
