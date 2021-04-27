@@ -44,10 +44,11 @@ class Detector:
                   +abs(saved_H[...,0])**2*self.grid.permeability[self.slicing][...,0]
                   +abs(saved_H[...,1])**2*self.grid.permeability[self.slicing][...,1]
                   +abs(saved_H[...,2])**2*self.grid.permeability[self.slicing][...,2]) * 0.5
-        self.timing_E[time_step,...] = saved_E
-        self.timing_H[time_step,...] = saved_H
-        self.timing_S[time_step,...] = saved_S
-        self.timing_U[time_step,...] = saved_U
+        capture = time_step//self.capture_period
+        self.timing_E[capture,...] = saved_E
+        self.timing_H[capture,...] = saved_H
+        self.timing_S[capture,...] = saved_S
+        self.timing_U[capture,...] = saved_U
     
     def visualize(self, scalar_field, **kwargs):
         if self.grid.dim == 3 and all([s != 0 or s != slice(None,None,None)]):

@@ -2,7 +2,7 @@ from pylab import *
 
 
 class Object:
-    def __init__(self, center, permittivity=1, permeability=1, conductivity=0, monductivity=0, x_axis=None, y_axis=None, z_axis=None):
+    def __init__(self, center, permittivity=1, permeability=1, conductivity=0, monductivity=0, x_axis=None, y_axis=None, z_axis=None, dispersion=None, **disp_kwargs):
         self.center = center
         self.x_axis = x_axis
         self.y_axis = y_axis
@@ -10,7 +10,7 @@ class Object:
         
         self.permittivity = permittivity * array([1,1,1])
         self.permeability = permeability * array([1,1,1])
-        self.refractive_index = sqrt(self.permittivity*self.permeability)
+        self.refractive_index = (abs(self.permittivity*self.permeability))**0.5
         self.conductivity = conductivity * array([1,1,1])
         self.monductivity = monductivity * array([1,1,1])
         
@@ -19,6 +19,12 @@ class Object:
         self.slicing = None
         
         self.grid = None
+        
+        self.dispersion = dispersion
+    
+    def dispersion_coefs(self):
+        if self.dispersion is None:
+            pass
 
 
 class Ellipsoid(Object):

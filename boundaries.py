@@ -249,7 +249,7 @@ class Absorbing(Boundary):
 
 
 class PML(Boundary):
-    def __init__(self, refractive_index=1, kappa=1, alpha=1, sigma=1, thickness=10, growing_step=1e-7):
+    def __init__(self, kappa=1, alpha=1, sigma=1, thickness=10, growing_step=1e-7):
         super().__init__()
         self.previous_E = None #For own abs bounds
         self.previous_H = None
@@ -260,12 +260,6 @@ class PML(Boundary):
         self.sigma = sigma
         
         self.growing_step = growing_step
-        
-        if refractive_index < 1:
-            raise ValueError("Refractive index has to be 1 or more")
-            quit()
-        else:
-            self.refractive_index = refractive_index
         
         if thickness <= 1:
             raise ValueError("Thickess has to be at least 2")
@@ -340,9 +334,9 @@ class PML(Boundary):
         ng = self.grid.refractive_index[self.slicing].reshape(flat_sh)
         epsg = self.grid.permittivity[self.slicing].reshape(flat_sh)
         mug = self.grid.permeability[self.slicing].reshape(flat_sh)
-        self.refractive_index *= ones((self.Nx, self.Ny, self.Nz, 3))
-        epsPML = epsg * self.refractive_index/ng
-        muPML = mug * self.refractive_index/ng
+        self.refractive_index = ng * ones((self.Nx, self.Ny, self.Nz, 3))
+        epsPML = epsg * ones((self.Nx, self.Ny, self.Nz, 3))
+        muPML = mug * ones((self.Nx, self.Ny, self.Nz, 3))
         
         self.chxe = self.grid.courant_number / muPML[...,0] / VACUUM_IMPEDANCE
         self.chye = self.grid.courant_number / muPML[...,1] / VACUUM_IMPEDANCE

@@ -27,7 +27,7 @@ elif nbits = 64:
 
 
 class Grid:
-    def __init__(self, shape, spatial_step = 1.55e-7, courant_number=None, permittivity=1, permeability=1, conductivity=0, monductivity=0, is_phasor=True):
+    def __init__(self, shape, spatial_step = 1.55e-7, courant_number=None, permittivity=1, permeability=1, conductivity=0, monductivity=0, is_phasor=True, coord_centered=True):
         self.Nx,self.Ny,self.Nz = shape
         if self.Nx<1 or self.Ny<1 or self.Nz<1:
             raise ValueError("Shape must be 1 or more")
@@ -44,14 +44,21 @@ class Grid:
         self.time_pace = self.courant_number * self.spatial_step / VACUUM_LIGHT_SPEED
         
         a,b,c = spatial_step * array([self.Nx,self.Ny,self.Nz])
-        self.x,self.y,self.z = meshgrid(arange(-a/2,a/2,spatial_step),arange(-b/2,b/2,spatial_step),arange(-c/2,c/2,spatial_step))
+        if coord_centered:
+            self.x,self.y,self.z = meshgrid(linspace(-a/2,a/2-spatial_step,self.Nx),
+                                            linspace(-b/2,b/2-spatial_step,self.Ny),
+                                            linspace(-c/2,c/2-spatial_step,self.Nz))
+        else:
+            self.x,self.y,self.z = meshgrid(linspace(0,a-spatial_step,self.Nx),
+                                            linspace(0,b-spatial_step,self.Ny),
+                                            linspace(0,c-spatial_step,self.Nz))
         self.x = self.x.transpose(1,0,2)
         self.y = self.y.transpose(1,0,2)
         self.z = self.z.transpose(1,0,2)
         
         self.permittivity = ones((self.Nx,self.Ny,self.Nz,3)) * (permittivity * array([1,1,1]))
         self.permeability = ones((self.Nx,self.Ny,self.Nz,3)) * (permeability * array([1,1,1]))
-        self.refractive_index = sqrt(self.permittivity*self.permeability)
+        self.refractive_index = sqrt(abs(self.permittivity*self.permeability))
         self.conductivity = ones((self.Nx,self.Ny,self.Nz,3)) * (conductivity * array([1,1,1]))
         self.monductivity = ones((self.Nx,self.Ny,self.Nz,3)) * (monductivity * array([1,1,1]))
         
@@ -138,6 +145,7 @@ class Grid:
     def add_object(self, obj, name):
         obj.grid = self
         obj.gen_mask()
+        obj.dispersion_coefs()
         self.objects[name] = obj
     
     def add_boundary(self, bound, slicing):
@@ -160,26 +168,31 @@ class Grid:
         self.detectors += [detector]
     
     def set_coefs(self):
-        chc = (0.5*self.monductivity/self.permeability)*self.courant_number/self.spatial_step*VACUUM_IMPEDANCE
+        chc = (0.5*self.monductivity/self.permeability)*self.courant_number*self.spatial_step/VACUUM_IMPEDANCE
         che = self.courant_number/self.permeability/VACUUM_IMPEDANCE
         cec = (0.5*self.conductivity/self.permittivity)*self.courant_number*self.spatial_step*VACUUM_IMPEDANCE
         ceh = self.courant_number/self.permittivity*VACUUM_IMPEDANCE
         
-        self.chxe = che[...,0]
+        self.chxe = che[...,0]/(1+chc[...,0])
         self.chxh = (1-chc[...,0])/(1+chc[...,0])
-        self.chye = che[...,1]
+        self.chye = che[...,1]/(1+chc[...,1])
         self.chyh = (1-chc[...,1])/(1+chc[...,1])
-        self.chze = che[...,2]
+        self.chze = che[...,2]/(1+chc[...,2])
         self.chzh = (1-chc[...,2])/(1+chc[...,2])
         
         self.cexe = (1-cec[...,0])/(1+cec[...,0])
-        self.cexh = ceh[...,0]
+        self.cexh = ceh[...,0]/(1+cec[...,0])
         self.ceye = (1-cec[...,1])/(1+cec[...,1])
-        self.ceyh = ceh[...,1]
+        self.ceyh = ceh[...,1]/(1+cec[...,1])
         self.ceze = (1-cec[...,2])/(1+cec[...,2])
-        self.cezh = ceh[...,2]
+        self.cezh = ceh[...,2]/(1+cec[...,2])
     
     def update_H(self):
+        #Lossy factor
+        self.H[...,0] *= self.chxh
+        self.H[...,1] *= self.chyh
+        self.H[...,2] *= self.chzh
+        
         #Update on x axis
         if self.Nx > 1:
             self.H[:-1,:,:,1] += self.chye[:-1,:,:] * (self.E[1:,:,:,2] - self.E[:-1,:,:,2]) #Hy
@@ -196,6 +209,11 @@ class Grid:
             self.H[:,:,:-1,1] -= self.chye[:,:,:-1] * (self.E[:,:,1:,0] - self.E[:,:,:-1,0]) #Hy
     
     def update_E(self):
+        #Lossy factor
+        self.E[...,0] *= self.cexe
+        self.E[...,1] *= self.ceye
+        self.E[...,2] *= self.ceze
+        
         #Update on x axis
         if self.Nx > 1:
             self.E[1:,:,:,1] -= self.ceyh[1:,:,:] * (self.H[1:,:,:,2] - self.H[:-1,:,:,2]) #Ey
