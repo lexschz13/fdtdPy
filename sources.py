@@ -20,7 +20,12 @@ def ricker(t, **kwargs):
 def saturation(t, **kwargs):
     w = 1 if not "width" in kwargs.keys() else kwargs["width"]
     p = 1 if not "pace" in kwargs.keys() else kwargs["pace"]
-    result = 0 if t==0 else (p+1)/(p + exp(w/t))
+    if hasattr(t, "__iter__"):
+        result = zeros(t.shape)
+        wh_not_null = where(t!=0)
+        result[wh_not_null] = (p+1)/(p + exp(w/t[wh_not_null]))
+    else:
+        result = 0 if t==0 else (p+1)/(p + exp(w/t))
     return result
 
 
@@ -36,7 +41,7 @@ def sinusoid(t, **kwargs):
 
 
 class Source:
-    def __init__(self, amplitude=1, polarization=[0,0,1], env_func=gaussian, direction=None, frequency=0, shift=-pi/2, tfsf_for_d = None, tfsf_back_d = None, **kwargs):
+    def __init__(self, amplitude=1, polarization=[0,0,1], env_func=gaussian, direction=None, frequency=0, shift=-pi/2, tfsf_for_d=None, tfsf_back_d=None, **kwargs):
         self.amplitude = amplitude 
         self.polarization = polarization
         self.envelope_func = env_func
@@ -44,14 +49,16 @@ class Source:
         self.temp_func_params.update({"frequency":frequency, "shift":shift})
         self.direction = direction
         
-        if tfsf_for_d < 0:
-            raise ValueError("Distance for forward TFSF has to be positive or 0")
-            quite()
+        if not tfsf_for_d is None:
+            if tfsf_for_d < 0:
+                raise ValueError("Distance for forward TFSF has to be positive or 0")
+                quite()
         self.tfsf_for_d  = tfsf_for_d
         self.tfsf_for = None
-        if tfsf_back_d >= 0:
-            raise ValueError("Distance for forward TFSF has to be negative")
-            quite()
+        if not tfsf_back_d is None:
+            if tfsf_back_d >= 0:
+                raise ValueError("Distance for forward TFSF has to be negative")
+                quite()
         self.tfsf_back_d = tfsf_back_d
         self.tfsf_back = None
         
@@ -74,14 +81,15 @@ class Source:
             return time * array([1,1,1])
     
     def check_tfsf(self):
-        if self.tfsf_for_d is None and self.tfsf_back_d is None and (self.grid.sources[0].tfsf_for!=None or self.grid.sources[0].tfsf_back!=None):
-            raise AssertionError("Only one source if TFSF is used")
-            quit()
-        if (self.self.tfsf_for_d != None or self.tfsf_back_d != None) and len(self.grid.sources) >= 1:
-            raise AssertionError("Only one source if TFSF is used")
-            quit()
-        self.tfsf_for = TFSF(self, self.tfsf_for_d)
-        self.tfsf_back = TFSF(self, self.tfsf_back_d)
+        if len(self.grid.sources) >= 1:
+            if self.tfsf_for_d != None or self.tfsf_back_d != None:
+                raise AssertionError("Only one source if TFSF is used")
+                quit()
+            if self.grid.sources[0].tfsf_for!=None or self.grid.sources[0].tfsf_back!=None:
+                raise AssertionError("Only one source if TFSF is used")
+                quit()
+        self.tfsf_for = TFSF(self, self.tfsf_for_d) if not self.tfsf_for_d is None else None
+        self.tfsf_back = TFSF(self, self.tfsf_back_d) if not self.tfsf_back_d is None else None
     
     def add_params(self):
         self.temp_func_params.update({"is_phasor":self.grid.is_phasor})
@@ -110,8 +118,8 @@ class Source:
 
 
 class GaussianSource(Source):
-    def __init__(self, amplitude=1, polarization=[0,0,1], direction=None, frequency=0, shift=-pi/2, sigma=1e-14, delay=4e-14):
-        super().__init__(amplitude, polarization, env_func=gaussian, direction=direction, frequency=frequency, shift=shift, sigma=sigma, delay=delay)
+    def __init__(self, amplitude=1, polarization=[0,0,1], direction=None, frequency=0, shift=-pi/2, sigma=1e-14, delay=4e-14, tfsf_for_d=None, tfsf_back_d=None):
+        super().__init__(amplitude, polarization, env_func=gaussian, direction=direction, frequency=frequency, shift=shift, tfsf_for_d=tfsf_for_d, tfsf_back_d=tfsf_back_d, sigma=sigma, delay=delay)
     
     @property
     def sigma(self):
@@ -131,8 +139,8 @@ class GaussianSource(Source):
 
 
 class RickerSource(Source):
-    def __init__(self, amplitude=1, polarization=[0,0,1], direction=None, frequency=0, shift=-pi/2, sigma=1e-14, delay=4e-14):
-        super().__init__(amplitude, polarization, env_func=ricker, direction=direction, frequency=frequency, shift=shift, sigma=sigma, delay=delay)
+    def __init__(self, amplitude=1, polarization=[0,0,1], direction=None, frequency=0, shift=-pi/2, sigma=1e-14, delay=4e-14, tfsf_for_d=None, tfsf_back_d=None):
+        super().__init__(amplitude, polarization, env_func=ricker, direction=direction, frequency=frequency, shift=shift, tfsf_for_d=tfsf_for_d, tfsf_back_d=tfsf_back_d, sigma=sigma, delay=delay)
     
     @property
     def sigma(self):
@@ -152,8 +160,8 @@ class RickerSource(Source):
 
 
 class SatSource(Source):
-    def __init__(self, amplitude=1, polarization=[0,0,1], direction=None, frequency=0, shift=-pi/2, width=1, pace=1):
-        super().__init__(amplitude, polarization, env_func=saturation, frequency=frequency, shift=shift, direction=direction, width=width, pace=pace)
+    def __init__(self, amplitude=1, polarization=[0,0,1], direction=None, frequency=0, shift=-pi/2, width=1, pace=1, tfsf_for_d=None, tfsf_back_d=None):
+        super().__init__(amplitude, polarization, env_func=saturation, frequency=frequency, shift=shift, tfsf_for_d=tfsf_for_d, tfsf_back_d=tfsf_back_d, direction=direction, width=width, pace=pace)
     
     @property
     def width(self):
