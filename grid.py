@@ -145,7 +145,6 @@ class Grid:
     def add_object(self, obj, name):
         obj.grid = self
         obj.gen_mask()
-        obj.dispersion_coefs()
         self.objects[name] = obj
     
     def add_boundary(self, bound, slicing):
@@ -186,6 +185,10 @@ class Grid:
         self.ceyh = ceh[...,1]/(1+cec[...,1])
         self.ceze = (1-cec[...,2])/(1+cec[...,2])
         self.cezh = ceh[...,2]/(1+cec[...,2])
+        
+        for name in self.objects.keys():
+            obj = self.objects[name]
+            obj.dispersion_coefs()
     
     def update_H(self):
         #Lossy factor
@@ -207,8 +210,29 @@ class Grid:
         if self.Nz > 1:
             self.H[:,:,:-1,0] += self.chxe[:,:,:-1] * (self.E[:,:,1:,1] - self.E[:,:,:-1,1]) #Hx
             self.H[:,:,:-1,1] -= self.chye[:,:,:-1] * (self.E[:,:,1:,0] - self.E[:,:,:-1,0]) #Hy
+        
+        #Update H in boundaries subgrid (PML)
+        for bound_key in self.boundaries.keys():
+            if not self.boundaries[bound_key] is None:
+                self.boundaries[bound_key].update_boundH()
+        
+        #Apply H boundaries
+        if not self.boundaries["xH"] is None:
+            self.boundaries["xH"].update_H()
+        if not self.boundaries["yH"] is None:
+            self.boundaries["yH"].update_H()
+        if not self.boundaries["zH"] is None:
+            self.boundaries["zH"].update_H()
+        
+        #TFSF
+        if len(self.sources) == 1:
+            src = self.sources[0]
+            if src.tfsf_for != None:
+                src.tfsf_for.update_H(q * self.time_pace)
+            if src.tfsf_back != None:
+                src.tfsf_back.update_H(q * self.time_pace)
     
-    def update_E(self):
+    def update_E(self, time_step):
         #Lossy factor
         self.E[...,0] *= self.cexe
         self.E[...,1] *= self.ceye
@@ -229,6 +253,35 @@ class Grid:
             self.E[:,:,1:,0] -= self.cexh[:,:,1:] * (self.H[:,:,1:,1] - self.H[:,:,:-1,1]) #Ex
             self.E[:,:,1:,1] += self.ceyh[:,:,1:] * (self.H[:,:,1:,0] - self.H[:,:,:-1,0]) #Ey
         
+        for bound_key in self.boundaries.keys():
+            if not self.boundaries[bound_key] is None:
+                self.boundaries[bound_key].update_boundE()
+        
+        #Apply E boundaries
+        if not self.boundaries["xE"] is None:
+            self.boundaries["xE"].update_E()
+        if not self.boundaries["yE"] is None:
+            self.boundaries["yE"].update_E()
+        if not self.boundaries["zE"] is None:
+            self.boundaries["zE"].update_E()
+        
+        #Injection
+        for source in self.sources:
+            source.update_E(time_step * self.time_pace)
+        
+        #Disperssion correction
+        for name in self.objects:
+            obj = self.objects[name]
+            if not obj.dispersion is None:
+                self.E[obj.slicing][...,0] -= self.cexh[obj.slicing] * 0.5*(1+obj.cjj) * obj.dJp[...,0]
+                self.E[obj.slicing][...,1] -= self.ceyh[obj.slicing] * 0.5*(1+obj.cjj) * obj.dJp[...,1]
+                self.E[obj.slicing][...,2] -= self.cezh[obj.slicing] * 0.5*(1+obj.cjj) * obj.dJp[...,2]
+        
+        #Updating Jp in dispersive objects
+        for name in self.objects.keys():
+            obj = self.objects[name]
+            obj.update_J()
+        
     def run(self, time_steps):
         if os.path.exists(tmpdir):
             for fl in os.listdir(tmpdir): #Remove past simulations
@@ -248,42 +301,14 @@ class Grid:
             
         for q in tqdm(range(time_steps)):
             self.update_H()
-            for bound_key in self.boundaries.keys():
-                if not self.boundaries[bound_key] is None:
-                    self.boundaries[bound_key].update_boundH()
             
-            #Apply H boundaries
-            if not self.boundaries["xH"] is None:
-                self.boundaries["xH"].update_H()
-            if not self.boundaries["yH"] is None:
-                self.boundaries["yH"].update_H()
-            if not self.boundaries["zH"] is None:
-                self.boundaries["zH"].update_H()
+            #Saving pervious E for dispersive objects
+            for name in self.objects.keys():
+                obj = self.objects[name]
+                if not obj.dispersion is None:
+                    obj.prevE = self.E[obj.slicing]
             
-            #TFSF
-            if len(self.sources) == 1:
-                src = self.sources[0]
-                if src.tfsf_for != None:
-                    src.tfsf_for.update_H(q * self.time_pace)
-                if src.tfsf_back != None:
-                    src.tfsf_back.update_H(q * self.time_pace)
-            
-            self.update_E()
-            for bound_key in self.boundaries.keys():
-                if not self.boundaries[bound_key] is None:
-                    self.boundaries[bound_key].update_boundE()
-            
-            #Apply E boundaries
-            if not self.boundaries["xE"] is None:
-                self.boundaries["xE"].update_E()
-            if not self.boundaries["yE"] is None:
-                self.boundaries["yE"].update_E()
-            if not self.boundaries["zE"] is None:
-                self.boundaries["zE"].update_E()
-            
-            #Injection
-            for source in self.sources:
-                source.update_E(q * self.time_pace)
+            self.update_E(q)
             
             for d in self.detectors:
                 if q%d.capture_period == 0:
