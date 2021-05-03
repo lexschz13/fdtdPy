@@ -314,6 +314,13 @@ class Grid:
                 if q%d.capture_period == 0:
                     d.save_fields(q)
                 
+    def close(self):
+        for d in self.detectors:
+            d.timing_E._mmap.close()
+            d.timing_H._mmap.close()
+            d.timing_S._mmap.close()
+            d.timing_U._mmap.close()
+    
     def visualizeEx(self):
         for d in self.detectors:
             d.visualizeEx()
